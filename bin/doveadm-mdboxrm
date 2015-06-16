@@ -1,0 +1,130 @@
+#!/bin/sh
+
+#
+# This program removes SIS enabled user's mdbox storages.
+#
+
+DOVEADM="/usr/local/bin/doveadm"
+
+#-------------------------------
+
+DOVEADM_DEBUG=
+DRY_RUN=
+INTERACTIVE=
+
+PROGNAME=`basename $0`
+PROGDESCR="$PROGNAME - removes SIS enabled user's mdbox storage."
+
+[ -t 0 ] && INTERACTIVE=1
+
+usage () {
+    cat >&2 <<EOF
+
+$PROGDESCR
+
+usage: $PROGNAME [-D] [-n] user [user2 ...]
+       $PROGNAME [-h]
+    -D doveadm verbosity and debug messages
+    -n dry run
+    -h brief help
+EOF
+}
+
+while getopts Dhn opt; do
+    case "$opt" in
+        D)
+            DOVEADM_DEBUG="-D";;
+        n)
+            DRY_RUN="echo";;
+        # \? - unknown flag
+        h|?)
+            [ $INTERACTIVE ] && {
+                usage
+                [ $opt = "h" ] && exit 0
+                exit 1
+            }
+            printf >&2 "Illegal command line option, exiting"
+            exit 1;;
+    esac
+done
+
+shift $(($OPTIND - 1))
+
+[ $1 ] || {
+    usage
+    exit 1
+}
+
+# Do exit on SIGINT or SIGTERM
+trap 'printf >&2 "\nExiting on signal 2\n";  exit 0' 2
+trap 'printf >&2 "\nExiting on signal 15\n"; exit 0' 15
+
+fn_input_n () {
+# Reads line from stdin in $INPUT variable.
+# Exit status:
+#     0 - input is "y";
+#     1 - input is "n" or empty (default "n").
+
+    while :
+    do
+        read INPUT
+        case $INPUT in
+               y) return 0;;
+            ''|n) return 1;;
+               *) echo -e "Type 'y' or 'n': \c";;
+        esac
+    done
+}
+
+die () {
+    case $1 in
+        expunge|purge|remove)	ERR_MSG="Failed to $1 $MAILUSER";;
+#        status)			ERR_MSG="Failed to get $1 of $MAILUSER";;
+        home)			ERR_MSG="Failed to find home directory of $MAILUSER";;
+    esac
+
+    echo -e "==> \033[1;31m*** ${ERR_MSG} ***\033[m"
+    exit 1
+}
+
+warn () {
+    case $1 in
+        notempty)	ERR_MSG="Mail storage of $MAILUSER is not empty";;
+    esac
+
+    echo -e "==> \033[1;31m*** ${ERR_MSG} ***\033[m"
+}
+
+[ $INTERACTIVE ] && {
+    echo
+    for MAILUSER in $@; do
+        echo $MAILUSER
+        $DOVEADM user -f home $MAILUSER \
+          || die home
+        $DOVEADM mailbox status -u $MAILUSER -t all '*' \
+          || die status
+        echo
+    done
+    printf "Delete the mailbox(es)? [y/N]: "
+    fn_input_n || exit 0
+    echo
+}
+
+for MAILUSER in $@; do
+    $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
+      expunge -d -u $MAILUSER mailbox '*' all \
+        || die expunge
+    $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
+      purge -u $MAILUSER \
+        || die purge
+    $DOVEADM $DOVEADM_DEBUG \
+      mailbox status -u $MAILUSER -t all '*' \
+        | grep -q 'messages=0 recent=0 unseen=0 vsize=0' \
+        || {
+            warn notempty
+            continue
+         }
+    $DRY_RUN rm -r `$DOVEADM user -f home $MAILUSER` \
+        || die remove
+    [ $DRY_RUN ] && echo
+done

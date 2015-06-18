@@ -1,0 +1,91 @@
+#!/bin/sh
+
+#
+# This program iterates over passwd-file databases and
+# expunges and purges messages in Junk and Trash folders for all users.
+#
+
+PASSWD_FILE_PATH="/usr/local/etc/dovecot/dovecot.auth"
+PASSWD_FILE_SUFFIX="passwd"
+DOVEADM="/usr/local/bin/doveadm"
+
+DELETED_INTERVAL=1W
+JUNK_TRASH_INTERVAL=2W
+
+#-------------------------------
+
+DOVEADM_DEBUG=
+DRY_RUN=
+INTERACTIVE=
+CMD="expunge"
+
+PROGNAME=`basename $0`
+PROGDESCR="$PROGNAME - Expunge messages in Junk and Trash folders for all users."
+
+[ -t 0 ] && INTERACTIVE=1
+
+usage () {
+    cat >&2 <<EOF
+
+$PROGDESCR
+
+usage: $PROGNAME [-D] [-n]
+       $PROGNAME [-h]
+    -D doveadm verbosity and debug messages
+    -n dry run
+    -h brief help
+EOF
+}
+
+while getopts Dhn opt; do
+    case "$opt" in
+        D)
+            DOVEADM_DEBUG="-D";;
+        n)
+            CMD="search"
+            DRY_RUN="echo #";;
+        # \? - unknown flag
+        h|?)
+            [ $INTERACTIVE ] && {
+                usage
+                [ $opt = "h" ] && exit 0
+                exit 1
+            }
+            printf >&2 "Illegal command line option, exiting"
+            exit 1;;
+    esac
+done
+
+
+# Do exit on SIGINT or SIGTERM
+trap 'printf >&2 "\nExiting on signal 2\n"; exit 0' 2
+trap 'printf >&2 "\nExiting on signal 15\n"; exit 0' 15
+
+cd $PASSWD_FILE_PATH || {
+    printf >&2 "==> *** Failed to change directory ***\n"
+    exit 1
+}
+
+for EACHFILE in *.${PASSWD_FILE_SUFFIX}; do
+    EACHDOMAIN=`echo $EACHFILE | sed -En "s/(.+)\.${PASSWD_FILE_SUFFIX}$/\1/p"`
+    for EACHUSER in `sed -En "s|^([^#][^:]*).*|\\1|p" $EACHFILE`; do
+
+        [ "$DRY_RUN" ] && cat <<EOF
+==> ${EACHUSER}@${EACHDOMAIN}
+  -> mailbox '*' DELETED SAVEDBEFORE $DELETED_INTERVAL
+EOF
+        $DOVEADM $DOVEADM_DEBUG \
+          $CMD -u ${EACHUSER}@${EACHDOMAIN} \
+          mailbox '*' DELETED SAVEDBEFORE $DELETED_INTERVAL
+
+        [ "$DRY_RUN" ] && cat <<EOF
+  -> \( mailbox Junk* or mailbox Trash* \) SAVEDBEFORE $JUNK_TRASH_INTERVAL
+EOF
+        $DOVEADM $DOVEADM_DEBUG \
+          $CMD -u ${EACHUSER}@${EACHDOMAIN} \
+          \( mailbox Junk* or mailbox Trash* \) SAVEDBEFORE $JUNK_TRASH_INTERVAL
+
+        $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
+          purge -u ${EACHUSER}@${EACHDOMAIN}
+    done
+done

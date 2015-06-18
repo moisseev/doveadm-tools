@@ -35,7 +35,7 @@ while getopts Dhn opt; do
         D)
             DOVEADM_DEBUG="-D";;
         n)
-            DRY_RUN="echo";;
+            DRY_RUN="echo #";;
         # \? - unknown flag
         h|?)
             [ $INTERACTIVE ] && {
@@ -126,5 +126,5 @@ for MAILUSER in $@; do
          }
     $DRY_RUN rm -r `$DOVEADM user -f home $MAILUSER` \
         || die remove
-    [ $DRY_RUN ] && echo
+    [ "$DRY_RUN" ] && echo
 done

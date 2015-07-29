@@ -5,9 +5,10 @@ PREFIX ?= /usr/local
 INSTALL = /usr/bin/install -c
 
 bindir  = $(PREFIX)/bin
+etcdir  = $(PREFIX)/etc
 
 release = $(program)-$(version)
-src     = bin \
+src     = bin etc \
           Makefile README.md LICENSE
 
 cleanfiles = $(release).tgz \
@@ -16,12 +17,16 @@ cleanfiles = $(release).tgz \
 all:
 
 install:
-	$(INSTALL) -d -m 0755 $(DESTDIR)$(bindir) || exit 1;
+	$(INSTALL) -d -m 0755 $(DESTDIR)$(bindir) $(DESTDIR)$(etcdir) || exit 1;
 	cd bin && $(INSTALL) -m 0555 * $(DESTDIR)$(bindir) || exit 1;
+	cd etc && $(INSTALL) -m 0644 * $(DESTDIR)$(etcdir) || exit 1;
 
 uninstall:
 	-@cd bin && for file in *; do \
 		if [ -f $$file ]; then rm $(DESTDIR)$(bindir)/$$file; fi \
+	done
+	-@cd etc && for file in *; do \
+		if [ -f $$file ]; then rm $(DESTDIR)$(etcdir)/$$file; fi \
 	done
 
 release:

@@ -1,0 +1,11 @@
+#PASSWD_FILE_PATH="/usr/local/etc/dovecot/dovecot.auth"
+#PASSWD_FILE_SUFFIX="passwd"
+#DOVEADM="/usr/local/bin/doveadm"
+
+#R_HOSTNAME=""
+#R_DOVEADM_PORT="12345"
+
+#SKIP_USERS=" \
+#    user@example.com \
+#    spam@example.com \
+#    test@example.com"

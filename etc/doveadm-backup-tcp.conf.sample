@@ -2,10 +2,26 @@
 #PASSWD_FILE_SUFFIX="passwd"
 #DOVEADM="/usr/local/bin/doveadm"
 
-#R_HOSTNAME=""
-#R_DOVEADM_PORT="12345"
-
 #SKIP_USERS=" \
 #    user@example.com \
 #    spam@example.com \
 #    test@example.com"
+
+# Synchronized destination ( "location" is the default )
+#DESTINATION="tcp"
+
+#
+# "Location" destination specific options
+#
+
+# MAIL_HOME_PATH is the initial part of mail_home followed by /%d/%u
+#MAIL_HOME_PATH="/tmp/vmail"
+#mail_location="mdbox:~/mdbox"
+#mail_attachment_dir="$MAIL_HOME_PATH/attachments"
+
+#
+# "TCP" destination specific options
+#
+
+#R_HOSTNAME=""
+#R_DOVEADM_PORT="12345"

@@ -2,7 +2,9 @@
 
 #
 # This program iterates over passwd-file databases and
-# performs one-way synchronization of mailboxes via tcp connection.
+# performs one-way synchronization of mailboxes
+# from dovecot's mail storage to local directory
+# or via tcp connection.
 #
 
 PASSWD_FILE_PATH="/usr/local/etc/dovecot/dovecot.auth"
@@ -17,8 +19,13 @@ DOVEADM_DEBUG=
 DRY_RUN=
 INTERACTIVE=
 
+mail_home=
+mail_location=
+mail_attachment_dir=
+
 PROGNAME=`basename $0`
-PROGDESCR="$PROGNAME - one-way synchronization of mailboxes via tcp connection."
+PROGDESCR="$PROGNAME - one-way synchronization of mailboxes
+    to local directory or via tcp connection."
 
 CONF_FILE="/usr/local/etc/${PROGNAME}.conf"
 
@@ -44,7 +51,7 @@ while getopts c:Dhn opt; do
         D)
             DOVEADM_DEBUG="-D";;
         n)
-            DRY_RUN="echo #";;
+            DRY_RUN="echo # ";;
         # \? - unknown flag
         h|?)
             [ $INTERACTIVE ] && {
@@ -67,8 +74,10 @@ die () {
     case $1 in
         'change directory')	ERR_MSG="Failed to $1 $MAILUSER";;
         conf)			ERR_MSG="Can't load configuration file $CONF_FILE";;
-        R_HOSTNAME)		ERR_MSG="Invalid $1";;
-
+        R_HOSTNAME \
+          | MAIL_HOME_PATH \
+          | mail_location \
+          | mail_attachment_dir)	ERR_MSG="Invalid $1";;
     esac
 
     if [ $INTERACTIVE ]; then
@@ -86,11 +95,61 @@ die () {
 . $CONF_FILE \
   || die conf
 
-echo "$R_HOSTNAME" | egrep '^[[:alnum:]]+([-.][[:alnum:]]+)*$' >/dev/null
-[ $? -ne "0" ] && die R_HOSTNAME
+[ "`echo $DESTINATION | tr [:upper:] [:lower:]`" == tcp ] && USE_TCP=1
+
+fn_input_n () {
+# Reads line from stdin in $INPUT variable.
+# Exit status:
+#   0 - input is "y";
+#   1 - input is "n" or empty (default "n").
+
+    while :
+    do
+        read INPUT
+        case $INPUT in
+               y) return 0;;
+            ''|n) return 1;;
+               *) echo -e "Type 'y' or 'n': \c";;
+        esac
+    done
+}
+
+if [ $USE_TCP ]; then
+    echo "$R_HOSTNAME" | egrep '^[[:alnum:]]+([-.][[:alnum:]]+)*$' >/dev/null
+    [ $? -ne "0" ] && die R_HOSTNAME
+else
+    [ "$MAIL_HOME_PATH"      ] || die MAIL_HOME_PATH
+    [ "$mail_location"       ] || die mail_location
+    [ "$mail_attachment_dir" ] || die mail_attachment_dir
+
+    [ $INTERACTIVE ] && [ ! -d "$MAIL_HOME_PATH" ] && {
+        echo -e "\033[1;36m\
+MAIL_HOME_PATH directory $MAIL_HOME_PATH does not exist.
+Do you want to continue by creating it? [y/N]: \
+\033[m\c"
+        fn_input_n || exit 0
+    }
+fi
 
 cd $PASSWD_FILE_PATH \
   || die 'change directory'
+
+doveadm_backup_location () {
+    $DRY_RUN \
+        $DOVEADM $DOVEADM_DEBUG \
+            backup -P -u ${EACHUSER}@${EACHDOMAIN} \
+        $DOVEADM $DOVEADM_DEBUG \
+            -o mail_home=$MAIL_HOME_PATH/$EACHDOMAIN/$EACHUSER \
+            -o mail_location=$mail_location \
+            -o mail_attachment_dir=$mail_attachment_dir \
+            dsync-server -u ${EACHUSER}@${EACHDOMAIN}
+}
+
+doveadm_backup_tcp () {
+    $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
+        backup -P -u ${EACHUSER}@${EACHDOMAIN} \
+        tcp:$R_HOSTNAME:$R_DOVEADM_PORT
+}
 
 for EACHFILE in *.${PASSWD_FILE_SUFFIX}; do
     EACHDOMAIN=`echo $EACHFILE | sed -En "s/(.+)\.${PASSWD_FILE_SUFFIX}$/\1/p"`
@@ -112,9 +171,12 @@ for EACHFILE in *.${PASSWD_FILE_SUFFIX}; do
 
         [ $INTERACTIVE ] && echo "==> ${EACHUSER}@${EACHDOMAIN}"
 
-        $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
-            backup -P -u ${EACHUSER}@${EACHDOMAIN} \
-            tcp:$R_HOSTNAME:$R_DOVEADM_PORT
+        if [ $USE_TCP ]; then
+            doveadm_backup_tcp
+        else
+            doveadm_backup_location
+        fi
+
     done
 done
 

@@ -112,7 +112,7 @@ warn () {
 
 for MAILUSER in $@; do
     $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
-      expunge -d -u $MAILUSER mailbox '*' all \
+      expunge -d -u $MAILUSER mailbox '*' 1:* \
         || die expunge
     $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
       purge -u $MAILUSER \

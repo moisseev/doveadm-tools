@@ -4,6 +4,7 @@ MAIL_ATTACHMENT_DIR=`doveconf -h mail_attachment_dir`
 MAIL_UID=`doveconf -h mail_uid`
 
 DRY_RUN=
+CMP=1
 FIX=
 INTERACTIVE=
 EXIT_STATUS=0
@@ -17,9 +18,10 @@ usage () {
     cat >&2 <<EOF
 $PROGDESCR
 
-usage: $PROGNAME [-Fn] [-d directory] [-u uid]
+usage: $PROGNAME [-cFn] [-d directory] [-u uid]
        $PROGNAME [-h]
 
+    -c  Do not compare content of attachments.
     -F  Fix hard links. Recreate missed hash files and link identical attachments.
     -n  Dry run. Just print the commands without executing them.
     -d  mail_attachment_dir
@@ -29,8 +31,10 @@ usage: $PROGNAME [-Fn] [-d directory] [-u uid]
 EOF
 }
 
-while getopts hnFd:u: opt; do
+while getopts chnFd:u: opt; do
     case "$opt" in
+        c)
+            CMP=;;
         d)
             MAIL_ATTACHMENT_DIR="$OPTARG";;
         u)
@@ -179,7 +183,8 @@ for DIR in `fn_find_dir`; do
         if [ $HASH == "$PREV_HASH" ]; then
            if [ $INODE != "$PREV_INODE" ]; then
                 # compare byte by byte
-                cmp -z $ATT_FILE $PREV_ATT_FILE
+                [ ! "$CMP" ] || \
+                    cmp -z $ATT_FILE $PREV_ATT_FILE
                 if [  $? == 0 ]; then
 
                     [ ! "$FIX" ] || \

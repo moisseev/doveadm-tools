@@ -85,7 +85,7 @@ N_HASH_FAILED=0
 N_HASH_INVALID=0
 
 fn_find_dir() {
-    find . -regex "\.\(/[[:xdigit:]]\{2\}\)\{2\}" -depth 2 -type d
+    stdbuf -oL find . -regex "\.\(/[[:xdigit:]]\{2\}\)\{2\}" -depth 2 -type d
 }
 
 fn_skip_att() {

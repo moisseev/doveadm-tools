@@ -69,7 +69,15 @@ fi
 
 cd $MAIL_ATTACHMENT_DIR || exit 1
 
-printf "\n==> Checking for unexpected objects...\n\n"
+cat <<EOF
+
+mail_uid=$MAIL_UID
+mail_attachment_dir=$MAIL_ATTACHMENT_DIR
+
+==> Checking for unexpected objects...
+
+EOF
+
 find . \! \( -regex "\.\(/[[:xdigit:]]\{2\}\)\{1,2\}" -type d \) -mindepth 1 -maxdepth 2 -print
 
 printf "\n==> Checking attachments...\n\n"

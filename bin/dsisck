@@ -53,17 +53,17 @@ done
 
 
 [ $MAIL_UID ] || {
-    printf >&2 "mail_uid is not defined"
+    printf >&2 "mail_uid is not defined\n"
     exit 1
 }
 
 if [ `whoami` != $MAIL_UID ]; then
-    printf >&2 "You should run this script as $MAIL_UID"
+    printf >&2 "You should run this script as $MAIL_UID\n"
     exit 1
 fi
 
 [ $MAIL_ATTACHMENT_DIR ] || {
-    printf >&2 "mail_attachment_dir is not defined"
+    printf >&2 "mail_attachment_dir is not defined\n"
     exit 1
 }
 

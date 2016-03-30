@@ -161,6 +161,7 @@ mkfifo -m 600 $FIFO || exit 1
 for DIR in `fn_find_dir`; do
     PREV_ATT_FILE=
     PREV_HASH=
+    PREV_INODE=
 
     # Get attachment list sorted by hash and then by inode
     find $DIR -depth 1 -type f -exec ls -is1 '{}' \; | tr '-' ' ' | sort -k3,3 -nk1,1 > $FIFO &
@@ -199,6 +200,7 @@ for DIR in `fn_find_dir`; do
                 else
                     N_ATT_DIFFER=`expr $N_ATT_DIFFER + 1`
                 fi
+                PREV_INODE=$INODE
             fi
         else
             HASH_FILE=$DIR/hashes/$HASH

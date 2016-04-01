@@ -200,7 +200,6 @@ for DIR in `fn_find_dir`; do
                 else
                     N_ATT_DIFFER=`expr $N_ATT_DIFFER + 1`
                 fi
-                PREV_INODE=$INODE
             fi
         else
             HASH_FILE=$DIR/hashes/$HASH
@@ -225,6 +224,7 @@ for DIR in `fn_find_dir`; do
 
         PREV_HASH=$HASH
         PREV_ATT_FILE=$ATT_FILE
+        PREV_INODE=$INODE
     done < $FIFO
 done
 

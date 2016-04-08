@@ -113,6 +113,7 @@ sub chkOrphHash {
 
 sub byHashAndInode {
     $a->{hash} cmp $b->{hash}
+      || $b->{nlink} <=> $a->{nlink}
       || $a->{inode} <=> $b->{inode};
 }
 
@@ -154,8 +155,9 @@ sub chkHashFile {
         unless ( -f $hashFullName ) {
             say "$hashFullName => Not a regular file";
             $num{'hash'}{'invalid'}++;
+            return;
         }
-        return;
+        return if stat($hashFullName)->nlink >= 2;
     }
 
     &sysCmd("mkdir -p -m 700 $path && ln $currFullName $hashFullName")
@@ -225,6 +227,7 @@ sub getStat {
             push @files,
               {
                 inode    => $st->ino,
+                nlink    => $st->nlink,
                 blocks   => $st->blocks,
                 fullName => $fullName,
                 hash     => $hash

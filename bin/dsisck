@@ -1,230 +1,328 @@
-#!/bin/sh
+#!/usr/bin/env perl
 
-MAIL_ATTACHMENT_DIR=`doveconf -h mail_attachment_dir`
-MAIL_UID=`doveconf -h mail_uid`
+#========================================================================
+# dsisck - Dovecot SIS consistency check and repair
+#========================================================================
 
-DRY_RUN=
-CMP=1
-FIX=
-INTERACTIVE=
-EXIT_STATUS=0
+use strict;
+use warnings;
 
-PROGNAME=`basename $0`
-PROGDESCR="$PROGNAME - Dovecot SIS consistency check and repair"
+use 5.012;    # A bare readdir in while loop sets $_.
 
-[ -t 0 ] && INTERACTIVE=1
+use POSIX qw( getuid getgid setuid setgid );
+use File::stat;
+use File::Compare;
+use Getopt::Long qw( :config auto_help );
+use Pod::Usage;
 
-usage () {
-    cat >&2 <<EOF
-$PROGDESCR
+my ( %opt, $opt_d, $opt_F, $opt_n, $opt_u );
+GetOptions(
+    \%opt, 'c', 'o',
+    'd=s'       => \$opt_d,
+    'F|fix'     => \$opt_F,
+    'n|dry-run' => \$opt_n,
+    'u=s'       => \$opt_u,
+    'man'       => sub { pod2usage( -exitval => 0, -verbose => 2 ) },
+) || pod2usage(2);
 
-usage: $PROGNAME [-cFn] [-d directory] [-u uid]
-       $PROGNAME [-h]
-
-    -c  Do not compare content of attachments.
-    -F  Fix hard links. Recreate missed hash files and link identical attachments.
-    -n  Dry run. Just print the commands without executing them.
-    -d  mail_attachment_dir
-    -u  mail_uid
-
-    -h  Brief help.
-EOF
+unless ( system('which -s doveconf') ) {
+    chomp( $opt_d = `doveconf -h mail_attachment_dir` )
+      unless $opt_d;
+    chomp( $opt_u = `doveconf -h mail_uid` )
+      unless $opt_u;
 }
 
-while getopts chnFd:u: opt; do
-    case "$opt" in
-        c)
-            CMP=;;
-        d)
-            MAIL_ATTACHMENT_DIR="$OPTARG";;
-        u)
-            MAIL_UID="$OPTARG";;
-        n)
-            DRY_RUN="echo #";;
-        F)
-            FIX=1;;
-        # \? - unknown flag
-        h|?)
-            [ $INTERACTIVE ] && {
-                usage
-                [ $opt = "h" ] && exit 0
-                exit 1
+$opt_d
+  or die "mail_attachment_dir is not defined";
+$opt_u
+  or die "mail_uid is not defined";
+
+# Set UID/GID
+my ( undef, undef, $UID, $GID ) = getpwnam($opt_u);
+defined $UID
+  or die "user $opt_u does not exist";
+setuid($UID) if ( getuid() != $UID );
+setgid($GID) if ( getgid() != $GID );
+
+# Verify we are running as the correct user
+die "Wrong user: my userid is $>, instead of $UID ($opt_u).
+Please su [-m] $opt_u first.\n"
+  if ( $> != $UID );
+
+chdir($opt_d)
+  or die "mail_attachment_dir=$opt_d: $!\n";
+
+$opt_F = $opt_n
+  if $opt_n;
+
+say "\n\033[1;37m*** Write mode enabled ***\033[0m"
+  if $opt_F && !$opt_n;
+
+print <<EOF
+
+mail_uid=$opt_u
+mail_attachment_dir=$opt_d
+
+==> Checking SIS...
+
+EOF
+  ;
+
+# Initialize counters with zeros
+my %num = (
+    att      => { map { $_ => 0; } qw(processed differ dedup failed) },
+    hash     => { map { $_ => 0; } qw(invalid created failed orphaned) },
+    blkFreed => 0,
+    unexpObj => 0,
+);
+
+$SIG{'HUP'} = $SIG{'INT'} = $SIG{'PIPE'} = $SIG{'TERM'} = sub { exit 1 };
+
+&traverse( '.', 0 );
+
+exit;
+
+sub traverse {
+    my ( $path, $depth ) = @_;
+    opendir my $dh, $path or die "Cannot opendir $path: $!";
+    while ( readdir $dh ) {
+        next if /^\.\.?$/;
+
+        my $fullName = "$path/$_";
+        unless ( /^[[:xdigit:]]{2}$/ && ( -d $fullName ) ) {
+            say "$fullName => Unexpected object";
+            next;
+        }
+        if ( $depth < 1 ) {
+            &traverse( $fullName, $depth + 1 );
+            next;
+        }
+
+        &chkAtt($fullName);
+        &chkOrphHash($fullName)
+          unless exists $opt{'o'};
+    }
+    close $dh;
+}
+
+sub chkOrphHash {
+    my $path = shift . '/hashes';
+    return unless -d $path;
+    &getStat( $path, 'hash' );
+}
+
+sub byHashAndInode {
+    $a->{hash} cmp $b->{hash}
+      || $a->{inode} <=> $b->{inode};
+}
+
+sub chkAtt {
+    my $path = shift;
+
+    my @st = sort byHashAndInode getStat( $path, 'att' );
+    for my $c ( 0 .. $#st ) {
+        my $p = $c - 1;
+
+        $num{'att'}{'processed'}++;
+
+        if (   $c > 0
+            && $st[$c]{'hash'} eq $st[$p]{'hash'} )
+        {
+            &dedupAtt(
+                $st[$c]{'blocks'},
+                $st[$c]{'fullName'},
+                $st[$p]{'fullName'}
+              )
+              if $st[$p]{'inode'} && $st[$c]{'inode'} != $st[$p]{'inode'};
+        }
+        else {
+            &chkHashFile(
+                $path,
+                $st[$c]{'fullName'},
+                $st[$c]{'hash'}
+              );
+        }
+    }
+}
+
+sub chkHashFile {
+    my $path         = shift . '/hashes';
+    my $currFullName = shift;
+    my $hashFullName = "$path/" . shift;
+
+    if ( -e $hashFullName ) {
+        unless ( -f $hashFullName ) {
+            say "$hashFullName => Not a regular file";
+            $num{'hash'}{'invalid'}++;
+        }
+        return;
+    }
+
+    &sysCmd("mkdir -p -m 700 $path && ln $currFullName $hashFullName")
+      or do {
+        $num{'hash'}{'failed'}++;
+        return;
+      };
+
+    $num{'hash'}{'created'}++;
+}
+
+sub dedupAtt {
+    my ( $blocks, $currFullName, $prevFullName ) = @_;
+
+    # compare byte by byte
+    unless ( exists $opt{'c'}
+        || compare( $currFullName, $prevFullName ) == 0 )
+    {
+        $num{'att'}{'differ'}++;
+        say "Differ: $currFullName $prevFullName";
+        return;
+    }
+
+    &sysCmd("ln -f $prevFullName $currFullName")
+      or do {
+        $num{'att'}{'failed'}++;
+        return;
+      };
+
+    $num{'att'}{'dedup'}++;
+    $num{'blkFreed'} += $blocks;
+}
+
+sub getStat {
+    my ( $path, $t ) = @_;
+
+    my %re = (
+        dir => {
+            att  => qr/^(?:\.\.?|hashes)$/,
+            hash => qr/^\.\.?$/,
+        },
+        file => {
+            att  => qr/^[[:xdigit:]]{40}-[[:xdigit:]]{32}$/,
+            hash => qr/^[[:xdigit:]]{40}$/,
+        },
+    );
+
+    my @files;
+    opendir my $dh, $path or die "Cannot opendir $path: $!";
+    while ( readdir $dh ) {
+        my $fullName = "$path/$_";
+        unless ( -f $fullName
+            && !-l $fullName
+            && /$re{'file'}{$t}/ )
+        {
+            unless (/$re{'dir'}{$t}/) {
+                say "$fullName => Unexpected object";
+                $num{'unexpObj'}++;
             }
-        printf >&2 "Illegal command line option, exiting"
-        exit 1;;
-    esac
-done
+            next;
+        }
+        my $st = stat($fullName);
 
+        if ( $t eq 'att' ) {
+            my ($hash) = split( '-', $_ );
 
-[ $MAIL_UID ] || {
-    printf >&2 "mail_uid is not defined\n"
-    exit 1
+            push @files,
+              {
+                inode    => $st->ino,
+                blocks   => $st->blocks,
+                fullName => $fullName,
+                hash     => $hash
+              };
+        }
+        else {
+            next
+              if ( $st->nlink >= 2 );
+
+            say "$fullName => Orphaned hash file";
+            $num{'hash'}{'orphaned'}++;
+        }
+    }
+    return @files;
+    closedir $dh;
 }
 
-if [ `whoami` != $MAIL_UID ]; then
-    printf >&2 "You should run this script as $MAIL_UID\n"
-    exit 1
-fi
-
-[ $MAIL_ATTACHMENT_DIR ] || {
-    printf >&2 "mail_attachment_dir is not defined\n"
-    exit 1
+sub sysCmd {
+    return 1
+      unless $opt_F;
+    my $cmd = shift;
+    if ($opt_n) {
+        say "# $cmd";
+    }
+    else {
+        return 0
+          if ( system("$cmd") != 0 );
+    }
+    return 1;
 }
 
-cd $MAIL_ATTACHMENT_DIR || exit 1
+END {
+    exit unless %num;
 
-cat <<EOF
+    print <<EOF
 
-mail_uid=$MAIL_UID
-mail_attachment_dir=$MAIL_ATTACHMENT_DIR
+--------------------------------------------------------------
+ Unexpected objects found: $num{'unexpObj'}
 
-==> Checking for unexpected objects...
+ Attachments processed: $num{'att'}{'processed'}
+ Different attachments with similar hashes skipped: $num{'att'}{'differ'}
 
 EOF
+      ;
 
-find . \! \( -regex "\.\(/[[:xdigit:]]\{2\}\)\{1,2\}" -type d \) -mindepth 1 -maxdepth 2 -print
+    if ($opt_F) {
+        print <<EOF
+ Attachments deduplicated: $num{'att'}{'dedup'}
+ File system blocks freed up: $num{'blkFreed'}
+ Attachment deduplication attempts failed: $num{'att'}{'failed'}
 
-printf "\n==> Checking attachments...\n\n"
+ Hash files created: $num{'hash'}{'created'}
+ Hash files creation attempts failed: $num{'hash'}{'failed'}
+EOF
+          ;
+    }
+    else {
+        print <<EOF
+ Duplicated attachments: $num{'att'}{'dedup'}
+ File system blocks can be freed up: $num{'blkFreed'}
 
-N_ATT_TOTAL=0
-N_ATT_SKIPPED=0
-N_ATT_DIFFER=0
-N_ATT_DEDUP=0
-N_ATT_DEDUP_FAILED=0
-N_BLOCKS_FREED=0
-N_HASH=0
-N_HASH_FAILED=0
-N_HASH_INVALID=0
+ Missed hash files: $num{'hash'}{'created'}
+EOF
+          ;
+    }
 
-fn_find_dir() {
-    stdbuf -oL find . -regex "\.\(/[[:xdigit:]]\{2\}\)\{2\}" -depth 2 -type d
-}
+    say " Orphaned hash files: $num{'hash'}{'orphaned'}"
+      unless exists $opt{'o'};
 
-fn_skip_att() {
-    echo "Skipped $ATT_FILE => Incorrect $1"
-    N_ATT_SKIPPED=`expr $N_ATT_SKIPPED + 1`
-    continue
-}
-
-fn_end() {
-    rm "$FIFO"
-
-    if [ "$FIX" ]; then
-        cat <<EOF
-
---------------------------------------------------------------
- Total attachments: $N_ATT_TOTAL
-
- Attachments with incorrect file name skipped: $N_ATT_SKIPPED
- Different attachments with similar hashes skipped: $N_ATT_DIFFER
-
- Attachments deduplicated: $N_ATT_DEDUP
- File system blocks freed up: $N_BLOCKS_FREED
- Attachment deduplication attempts failed: $N_ATT_DEDUP_FAILED
-
- Hash files created: $N_HASH
- Hash files creation attempts failed: $N_HASH_FAILED
- Invalid hash files (not a regular file): $N_HASH_INVALID
+    print <<EOF
+ Invalid hash files (not a regular file): $num{'hash'}{'invalid'}
 --------------------------------------------------------------
 EOF
-    else
-        cat <<EOF
-
---------------------------------------------------------------
- Total attachments: $N_ATT_TOTAL
-
- Attachments with incorrect file name skipped: $N_ATT_SKIPPED
- Different attachments with similar hashes: $N_ATT_DIFFER
-
- Duplicated attachments: $N_ATT_DEDUP
- File system blocks can be freed up: $N_BLOCKS_FREED
-
- Hash files missed: $N_HASH
- Invalid hash files (not a regular file): $N_HASH_INVALID
---------------------------------------------------------------
-EOF
-    fi
-
-    exit $EXIT_STATUS
+      ;
 }
 
+__END__
 
-FIFO=`mktemp -u -t $PROGNAME`
 
-trap 'fn_end' EXIT
-trap 'EXIT_STATUS=129; exit' HUP
-trap 'EXIT_STATUS=130; exit' INT
-trap 'EXIT_STATUS=143; exit' TERM
+=head1 NAME
 
-mkfifo -m 600 $FIFO || exit 1
+dsisck - Dovecot SIS consistency check and repair
 
-for DIR in `fn_find_dir`; do
-    PREV_ATT_FILE=
-    PREV_HASH=
-    PREV_INODE=
+=head1 SYNOPSIS
 
-    # Get attachment list sorted by hash and then by inode
-    find $DIR -depth 1 -type f -exec ls -is1 '{}' \; | tr '-' ' ' | sort -k3,3 -nk1,1 > $FIFO &
+B<dsisck> [B<-c -o>] [B<-n>|B<-F>] [B<-d> directory] [B<-u> uid]
 
-    while read -r INODE BLOCKS DHASH GUID; do
-        HASH=`basename $DHASH`
-        ATT_FILE="$DHASH-$GUID"
-        N_ATT_TOTAL=`expr $N_ATT_TOTAL + 1`
+B<dsisck --help>|B<-h>|B<-?>|B<--man>
 
-        #
-        # Prechecks
-        #
-        echo $HASH  | egrep -q "^[[:xdigit:]]{40}$" || fn_skip_att "hash part"
-        echo $GUID  | egrep -q "^[[:xdigit:]]{32}$" || fn_skip_att "guid part"
-        echo $INODE | egrep -q "^[[:digit:]]+$"     || fn_skip_att "inode number"
+ Options:
+  -c               Do not compare content of attachments.
+  -o               Do not check for orphaned hash files.
+  -F, --fix        Recreate missed hash files and hard link identical attachments.
+  -n, --dry-run    Print the list of commands, but does not modify anything. This implies the -F option.
+  -d               Overrides mail_attachment_dir Dovecot's configuration setting.
+  -u               Overrides mail_uid Dovecot's configuration setting.
 
-        #
-        # Process files
-        #
-        if [ $HASH == "$PREV_HASH" ]; then
-           if [ $INODE != "$PREV_INODE" ]; then
-                # compare byte by byte
-                [ ! "$CMP" ] || \
-                    cmp -z $ATT_FILE $PREV_ATT_FILE
-                if [  $? == 0 ]; then
+  --help, -h, -?   brief help message
+  --man            full documentation
 
-                    [ ! "$FIX" ] || \
-                        $DRY_RUN ln -f $PREV_ATT_FILE $ATT_FILE
-
-                        if [  $? == 0 ]; then
-                            N_ATT_DEDUP=`expr $N_ATT_DEDUP + 1`
-                            N_BLOCKS_FREED=`expr $N_BLOCKS_FREED + $BLOCKS`
-                        else
-                            N_ATT_DEDUP_FAILED=`expr $N_ATT_DEDUP_FAILED + 1`
-                        fi
-                else
-                    N_ATT_DIFFER=`expr $N_ATT_DIFFER + 1`
-                fi
-            fi
-        else
-            HASH_FILE=$DIR/hashes/$HASH
-            if [ -e $HASH_FILE ]; then
-                [ -f $HASH_FILE ] || {
-                    echo "$HASH_FILE => Not a regular file"
-                    N_HASH_INVALID=`expr $N_HASH_INVALID + 1`
-                }
-            else
-                if [ ! "$FIX" ]; then
-                    N_HASH=`expr $N_HASH + 1`
-                else
-                    $DRY_RUN mkdir -p -m 700 $DIR/hashes && $DRY_RUN ln $ATT_FILE $HASH_FILE
-                    if [  $? == 0 ]; then
-                        N_HASH=`expr $N_HASH + 1`
-                    else
-                        N_HASH_FAILED=`expr $N_HASH_FAILED + 1`
-                    fi
-                fi
-            fi
-        fi
-
-        PREV_HASH=$HASH
-        PREV_ATT_FILE=$ATT_FILE
-        PREV_INODE=$INODE
-    done < $FIFO
-done
-
+=cut

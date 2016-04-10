@@ -70,8 +70,11 @@ EOF
 
 # Initialize counters with zeros
 my %num = (
-    att      => { map { $_ => 0; } qw(processed differ dedup failed) },
-    hash     => { map { $_ => 0; } qw(invalid created failed orphaned) },
+    att  => { map { $_ => 0; } qw(processed differ dedup failed) },
+    hash => {
+        map { $_ => 0; }
+          qw(invalid created failed relinked relinkFailed orphaned)
+    },
     blkFreed => 0,
     unexpObj => 0,
 );
@@ -139,6 +142,7 @@ sub chkAtt {
         else {
             &chkHashFile(
                 $path,
+                $st[$c]{'inode'},
                 $st[$c]{'fullName'},
                 $st[$c]{'hash'}
               );
@@ -148,6 +152,7 @@ sub chkAtt {
 
 sub chkHashFile {
     my $path         = shift . '/hashes';
+    my $currInode    = shift;
     my $currFullName = shift;
     my $hashFullName = "$path/" . shift;
 
@@ -157,7 +162,15 @@ sub chkHashFile {
             $num{'hash'}{'invalid'}++;
             return;
         }
-        return if stat($hashFullName)->nlink >= 2;
+        return if stat($hashFullName)->ino == $currInode;
+
+        &sysCmd("ln -f $currFullName $hashFullName")
+          or do {
+            $num{'hash'}{'relinkFailed'}++;
+            return;
+          };
+        $num{'hash'}{'relinked'}++;
+        return;
     }
 
     &sysCmd("mkdir -p -m 700 $path && ln $currFullName $hashFullName")
@@ -165,7 +178,6 @@ sub chkHashFile {
         $num{'hash'}{'failed'}++;
         return;
       };
-
     $num{'hash'}{'created'}++;
 }
 
@@ -281,6 +293,10 @@ EOF
 
  Hash files created: $num{'hash'}{'created'}
  Hash files creation attempts failed: $num{'hash'}{'failed'}
+
+ Hash files re-linked: $num{'hash'}{'relinked'}
+ Hash files re-link attempts failed: $num{'hash'}{'relinkFailed'}
+
 EOF
           ;
     }

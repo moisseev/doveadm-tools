@@ -117,7 +117,7 @@ sub chkOrphHash {
 sub byHashAndInode {
     $a->{hash} cmp $b->{hash}
       || $b->{nlink} <=> $a->{nlink}
-      || $a->{inode} <=> $b->{inode};
+      || $b->{inode} <=> $a->{inode};
 }
 
 sub chkAtt {

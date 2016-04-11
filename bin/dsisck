@@ -132,12 +132,14 @@ sub chkAtt {
         if (   $c > 0
             && $st[$c]{'hash'} eq $st[$p]{'hash'} )
         {
-            &dedupAtt(
-                $st[$c]{'blocks'},
-                $st[$c]{'fullName'},
-                $st[$p]{'fullName'}
-              )
-              if $st[$p]{'inode'} && $st[$c]{'inode'} != $st[$p]{'inode'};
+            if ( $st[$c]{'inode'} != $st[$p]{'inode'} ) {
+                &dedupAtt(
+                    $st[$c]{'blocks'},
+                    $st[$c]{'fullName'},
+                    $st[$p]{'fullName'}
+                ) or next;
+                $st[$c]{'inode'} = $st[$p]{'inode'};
+            }
         }
         else {
             &chkHashFile(
@@ -190,17 +192,18 @@ sub dedupAtt {
     {
         $num{'att'}{'differ'}++;
         say "Differ: $currFullName $prevFullName";
-        return;
+        return 0;
     }
 
     &sysCmd("ln -f $prevFullName $currFullName")
       or do {
         $num{'att'}{'failed'}++;
-        return;
+        return 0;
       };
 
     $num{'att'}{'dedup'}++;
     $num{'blkFreed'} += $blocks;
+    return 1;
 }
 
 sub getStat {

@@ -1,8 +1,8 @@
 #!/bin/sh
 
 #
-# This program iterates over passwd-file databases and
-# expunges and purges messages in Junk and Trash folders for all users.
+# This program iterates over passwd-file databases, expunges messages
+# in Junk and Trash folders and purges mailboxes for every user.
 #
 
 PASSWD_FILE_PATH="/usr/local/etc/dovecot/dovecot.auth"

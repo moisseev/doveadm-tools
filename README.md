@@ -4,7 +4,7 @@
 * **doveadm-backup** - iterates over passwd-file databases and performs one-way synchronization of mailboxes
  from Dovecot's mail storage to a local directory or via tcp connection.
 
-* **doveadm-expunge** - iterates over passwd-file databases and expunges and purges messages in `Junk` and `Trash` folders for all users.
+* **doveadm-expunge** - iterates over passwd-file databases, expunges messages in `Junk` and `Trash` folders and purges mailboxes for every user.
 
 * **doveadm-mdboxrm** - removes SIS enabled user's mdbox storages.
 

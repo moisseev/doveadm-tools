@@ -90,9 +90,7 @@ die () {
 }
 
 # Load configuration
-[ -r $CONF_FILE ] \
-  || die conf
-. $CONF_FILE \
+[ -r $CONF_FILE ] && . $CONF_FILE \
   || die conf
 
 [ "`echo $DESTINATION | tr [:upper:] [:lower:]`" == tcp ] && USE_TCP=1

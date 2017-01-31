@@ -5,8 +5,6 @@
 # in Junk and Trash folders and purges mailboxes for every user.
 #
 
-PASSWD_FILE_PATH="/usr/local/etc/dovecot/dovecot.auth"
-PASSWD_FILE_SUFFIX="passwd"
 DOVEADM="/usr/local/bin/doveadm"
 
 DELETED_INTERVAL=1W
@@ -61,31 +59,23 @@ done
 trap 'printf >&2 "\nExiting on signal 2\n"; exit 0' 2
 trap 'printf >&2 "\nExiting on signal 15\n"; exit 0' 15
 
-cd $PASSWD_FILE_PATH || {
-    printf >&2 "==> *** Failed to change directory ***\n"
-    exit 1
-}
-
-for EACHFILE in *.${PASSWD_FILE_SUFFIX}; do
-    EACHDOMAIN=`echo $EACHFILE | sed -En "s/(.+)\.${PASSWD_FILE_SUFFIX}$/\1/p"`
-    for EACHUSER in `sed -En "s|^([^#][^:]*).*|\\1|p" $EACHFILE`; do
+for EACHUSER in `${DOVEADM} user '*'`; do
 
         [ "$DRY_RUN" ] && cat <<EOF
-==> ${EACHUSER}@${EACHDOMAIN}
+==> ${EACHUSER}
   -> mailbox '*' DELETED SAVEDBEFORE $DELETED_INTERVAL
 EOF
         $DOVEADM $DOVEADM_DEBUG \
-          $CMD -u ${EACHUSER}@${EACHDOMAIN} \
+          $CMD -u ${EACHUSER} \
           mailbox '*' DELETED SAVEDBEFORE $DELETED_INTERVAL
 
         [ "$DRY_RUN" ] && cat <<EOF
   -> \( mailbox Junk* or mailbox Trash* \) SAVEDBEFORE $JUNK_TRASH_INTERVAL
 EOF
         $DOVEADM $DOVEADM_DEBUG \
-          $CMD -u ${EACHUSER}@${EACHDOMAIN} \
+          $CMD -u ${EACHUSER} \
           \( mailbox Junk* or mailbox Trash* \) SAVEDBEFORE $JUNK_TRASH_INTERVAL
 
         $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
-          purge -u ${EACHUSER}@${EACHDOMAIN}
-    done
+          purge -u ${EACHUSER}
 done

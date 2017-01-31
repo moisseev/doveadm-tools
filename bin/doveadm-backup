@@ -7,8 +7,6 @@
 # or via tcp connection.
 #
 
-PASSWD_FILE_PATH="/usr/local/etc/dovecot/dovecot.auth"
-PASSWD_FILE_SUFFIX="passwd"
 DOVEADM="/usr/local/bin/doveadm"
 
 R_DOVEADM_PORT="12345"
@@ -72,7 +70,6 @@ trap 'printf >&2 "\nExiting on signal 15\n"; exit 0' 15
 
 die () {
     case $1 in
-        'change directory')	ERR_MSG="Failed to $1 $MAILUSER";;
         conf)			ERR_MSG="Can't load configuration file $CONF_FILE";;
         R_HOSTNAME \
           | MAIL_HOME_PATH \
@@ -116,6 +113,14 @@ if [ $USE_TCP ]; then
     echo "$R_HOSTNAME" | egrep '^[[:alnum:]]+([-.][[:alnum:]]+)*$' >/dev/null
     [ $? -ne "0" ] && die R_HOSTNAME
 else
+
+#-------
+    echo -e "\033[1;36m\
+\"Location\" destination is disabled in the current script version.
+\033[m\c"
+    exit
+#-------
+
     [ "$MAIL_HOME_PATH"      ] || die MAIL_HOME_PATH
     [ "$mail_location"       ] || die mail_location
     [ "$mail_attachment_dir" ] || die mail_attachment_dir
@@ -129,45 +134,40 @@ Do you want to continue by creating it? [y/N]: \
     }
 fi
 
-cd $PASSWD_FILE_PATH \
-  || die 'change directory'
-
 doveadm_backup_location () {
     $DRY_RUN \
         $DOVEADM $DOVEADM_DEBUG \
-            backup -P -u ${EACHUSER}@${EACHDOMAIN} \
+            backup -P -u ${EACHUSER} \
         $DOVEADM $DOVEADM_DEBUG \
             -o mail_home=$MAIL_HOME_PATH/$EACHDOMAIN/$EACHUSER \
             -o mail_location=$mail_location \
             -o mail_attachment_dir=$mail_attachment_dir \
-            dsync-server -u ${EACHUSER}@${EACHDOMAIN}
+            dsync-server -u ${EACHUSER}
 }
 
 doveadm_backup_tcp () {
     $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
-        backup -P -u ${EACHUSER}@${EACHDOMAIN} \
+        backup -P -u ${EACHUSER} \
         tcp:$R_HOSTNAME:$R_DOVEADM_PORT
 }
 
-for EACHFILE in *.${PASSWD_FILE_SUFFIX}; do
-    EACHDOMAIN=`echo $EACHFILE | sed -En "s/(.+)\.${PASSWD_FILE_SUFFIX}$/\1/p"`
-    for EACHUSER in `sed -En "s|^([^#][^:]*).*|\\1|p" $EACHFILE`; do
+for EACHUSER in `${DOVEADM} user '*'`; do
 
         SKIP=
 
         for EACHSKIP_USER in $SKIP_USERS; do
-            [ "${EACHUSER}@${EACHDOMAIN}" = "$EACHSKIP_USER" ] && {
+            [ "${EACHUSER}" = "$EACHSKIP_USER" ] && {
                 SKIP=1
                 break
             }
         done
 
         [ $SKIP ] && {
-            [ $INTERACTIVE ] && echo -e "==> ${EACHUSER}@${EACHDOMAIN} \033[1;33m>>> skipped\033[m"
+            [ $INTERACTIVE ] && echo -e "==> ${EACHUSER} \033[1;33m>>> skipped\033[m"
             continue
         }
 
-        [ $INTERACTIVE ] && echo "==> ${EACHUSER}@${EACHDOMAIN}"
+        [ $INTERACTIVE ] && echo "==> ${EACHUSER}"
 
         if [ $USE_TCP ]; then
             doveadm_backup_tcp
@@ -175,7 +175,6 @@ for EACHFILE in *.${PASSWD_FILE_SUFFIX}; do
             doveadm_backup_location
         fi
 
-    done
 done
 
 [ $INTERACTIVE ] && echo -e "\n==> \033[1;32mBackup finished.\033[m"

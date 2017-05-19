@@ -1,0 +1,61 @@
+#!/usr/bin/env perl
+
+#========================================================================
+# doveadm-report-last-login - print Dovecot last-login dictionary file
+#   in human readable form
+#========================================================================
+
+use strict;
+use warnings;
+
+use POSIX 'strftime';
+use Getopt::Long qw( :config auto_help );
+use Pod::Usage;
+
+my ( %opt, $opt_d );
+GetOptions(
+    \%opt,
+    'd=s' => \$opt_d,
+    'man' => sub { pod2usage( -exitval => 0, -verbose => 2 ) },
+) || pod2usage(2);
+
+unless ($opt_d) {
+    my $last_login_dict = '';
+    unless ( system('which -s doveconf') ) {
+        chomp( $last_login_dict = `doveconf -h plugin/last_login_dict` );
+    }
+    $last_login_dict =~ /^file:(.+)$/
+      or die "Last-login dictionary file is not defined.";
+    $opt_d = $1;
+}
+
+open( FH, "<", $opt_d )
+  or die "Cannot open last-login dictionary file.";
+while ( my $line = <FH> ) {
+    if ( $line =~ /^shared\/last-login\/(.+)$/ ) {
+        printf "%40s  %s\n", $1, strftime '%F %T', localtime <FH>;
+    }
+}
+close(FH);
+
+__END__
+
+
+=head1 NAME
+
+doveadm-report-last-login - print Dovecot last-login dictionary file
+in human readable form
+
+=head1 SYNOPSIS
+
+B<doveadm-report-last-login> [B<-d> dictionary file]
+
+B<doveadm-report-last-login --help>|B<-h>|B<-?>|B<--man>
+
+ Options:
+  -d               last-login dictionary file (last_login_dict value by default)
+
+  --help, -h, -?   brief help message
+  --man            full documentation
+
+=cut

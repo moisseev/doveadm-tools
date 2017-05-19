@@ -8,6 +8,8 @@
 
 * **doveadm-mdboxrm** - removes SIS enabled user's mdbox storages.
 
+* **doveadm-report-last-login** - prints Dovecot last-login dictionary file in human readable form.
+
 * **doveadm-report-quota** - iterates over passwd-file databases and shows current quota usage.
 
 * **dsisck** - Dovecot SIS consistency check and repair. Based on explanation of SIS operation <sup>[1](#fn1),[2](#fn2),[3](#fn3)</sup>. Main purpose of this program is to deduplicate identical attachments that was saved in separate files for some reason. For instance, attachment deduplication was broken in Dovecot v2.2.16 upwards and fixed in v2.2.22. Every attachment was saved in a separate file.

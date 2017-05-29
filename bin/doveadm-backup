@@ -113,14 +113,6 @@ if [ $USE_TCP ]; then
     echo "$R_HOSTNAME" | egrep '^[[:alnum:]]+([-.][[:alnum:]]+)*$' >/dev/null
     [ $? -ne "0" ] && die R_HOSTNAME
 else
-
-#-------
-    echo -e "\033[1;36m\
-\"Location\" destination is disabled in the current script version.
-\033[m\c"
-    exit
-#-------
-
     [ "$MAIL_HOME_PATH"      ] || die MAIL_HOME_PATH
     [ "$mail_location"       ] || die mail_location
     [ "$mail_attachment_dir" ] || die mail_attachment_dir
@@ -135,11 +127,13 @@ Do you want to continue by creating it? [y/N]: \
 fi
 
 doveadm_backup_location () {
+    MAIL_HOME_SUBDIR=`echo $EACHUSER | sed -En "s|(.+)@(.+)|\2/\1|p"`
+
     $DRY_RUN \
         $DOVEADM $DOVEADM_DEBUG \
             backup -P -u ${EACHUSER} \
         $DOVEADM $DOVEADM_DEBUG \
-            -o mail_home=$MAIL_HOME_PATH/$EACHDOMAIN/$EACHUSER \
+            -o mail_home=$MAIL_HOME_PATH/$MAIL_HOME_SUBDIR \
             -o mail_location=$mail_location \
             -o mail_attachment_dir=$mail_attachment_dir \
             dsync-server -u ${EACHUSER}

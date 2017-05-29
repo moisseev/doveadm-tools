@@ -4,8 +4,6 @@
 # This program shows current quota usage.
 #
 
-PASSWD_FILE_PATH="/usr/local/etc/dovecot/dovecot.auth"
-PASSWD_FILE_SUFFIX="passwd"
 DOVEADM="/usr/local/bin/doveadm"
 MBOX_WIDTH=35
 
@@ -68,16 +66,10 @@ Invalid argument.
     fi
 done
 
-cd ${PASSWD_FILE_PATH} && {
-
-    for EACHFILE in *.${PASSWD_FILE_SUFFIX}
-        do EACHDOMAIN=`echo ${EACHFILE} | sed -En "s/(.+)\.${PASSWD_FILE_SUFFIX}$/\1/p"`
-        sed -En "s|^([^#][^:]*).*| \
-            echo \1@${EACHDOMAIN}; \
-            ${DOVEADM} -f flow quota get -u \1@${EACHDOMAIN}; printf  \
-        |p" ${EACHFILE}
+    for EACHUSER in `${DOVEADM} user '*'`; do
+        echo ${EACHUSER}; \
+            ${DOVEADM} -f flow quota get -u ${EACHUSER}; printf 
     done | \
-    sh | \
 
     tr -s "\n " "\t" | tr "\r" "\n" | \
 
@@ -136,5 +128,3 @@ cd ${PASSWD_FILE_PATH} && {
                     "TOTAL", STOR_TOT/GB, MSG_TOT
             }
         }'
-
-}

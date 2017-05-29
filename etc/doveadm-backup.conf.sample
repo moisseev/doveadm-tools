@@ -1,5 +1,3 @@
-#PASSWD_FILE_PATH="/usr/local/etc/dovecot/dovecot.auth"
-#PASSWD_FILE_SUFFIX="passwd"
 #DOVEADM="/usr/local/bin/doveadm"
 
 #SKIP_USERS=" \

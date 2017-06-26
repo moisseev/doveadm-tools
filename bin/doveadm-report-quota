@@ -23,10 +23,10 @@ usage: $PROGNAME [percent] [MB_free]
        $PROGNAME [-h]
 
     percent (positive number)
-        Supress rows with quota usage below this value (percents).
+        Suppress rows with quota usage below this value (percents).
 
     MB_free (positive number)
-        Supress rows with free storage quota above this value (MB).
+        Suppress rows with free storage quota above this value (MB).
 EOF
 }
 

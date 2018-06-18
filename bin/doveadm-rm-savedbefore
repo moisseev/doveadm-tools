@@ -107,7 +107,7 @@ die () {
 
 for MAILUSER in $@; do
     $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
-      expunge -u $MAILUSER SAVEDBEFORE $DATE \
+      expunge -u $MAILUSER mailbox '*' SAVEDBEFORE $DATE \
         || die expunge
     $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
       purge -u $MAILUSER \

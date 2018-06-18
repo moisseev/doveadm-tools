@@ -1,0 +1,118 @@
+#!/bin/sh
+
+#
+# This program removes messages, which were saved before the given date specification.
+#
+
+DOVEADM="/usr/local/bin/doveadm"
+
+#-------------------------------
+
+DOVEADM_DEBUG=
+DRY_RUN=
+INTERACTIVE=
+
+PROGNAME=`basename $0`
+PROGDESCR="$PROGNAME - removes messages, which were saved before the given date specification."
+
+[ -t 0 ] && INTERACTIVE=1
+
+usage () {
+    cat >&2 <<EOF
+
+$PROGDESCR
+
+usage: $PROGNAME [-D] [-n] date_specification user [user2 ...]
+       $PROGNAME [-h]
+    -D doveadm verbosity and debug messages
+    -n dry run
+    -h brief help
+
+    date_specification
+        Date in doveadm(1) date specification format.
+        See https://wiki2.dovecot.org/Tools/Doveadm/SearchQuery#section_date_specification
+EOF
+}
+
+while getopts Dhn opt; do
+    case "$opt" in
+        D)
+            DOVEADM_DEBUG="-D";;
+        n)
+            DRY_RUN="echo #";;
+        # \? - unknown flag
+        h|?)
+            [ $INTERACTIVE ] && {
+                usage
+                [ $opt = "h" ] && exit 0
+                exit 1
+            }
+            printf >&2 "Illegal command line option, exiting"
+            exit 1;;
+    esac
+done
+
+shift "$(($OPTIND - 1))"
+
+[ $1 ] && [ $2 ] || {
+    usage
+    exit 1
+}
+
+DATE="$1"; shift
+
+# Do exit on SIGINT or SIGTERM
+trap 'printf >&2 "\nExiting on signal 2\n";  exit 0' 2
+trap 'printf >&2 "\nExiting on signal 15\n"; exit 0' 15
+
+fn_input_n () {
+# Reads line from stdin in $INPUT variable.
+# Exit status:
+#     0 - input is "y";
+#     1 - input is "n" or empty (default "n").
+
+    while :
+    do
+        read INPUT
+        case $INPUT in
+               y) return 0;;
+            ''|n) return 1;;
+               *) echo -e "Type 'y' or 'n': \c";;
+        esac
+    done
+}
+
+die () {
+    case $1 in
+        expunge|purge)	ERR_MSG="Failed to $1 $MAILUSER";;
+        status)		ERR_MSG="Failed to get $1 of $MAILUSER";;
+    esac
+
+    echo -e "==> \033[1;31m*** ${ERR_MSG} ***\033[m"
+    exit 1
+}
+
+[ $INTERACTIVE ] && {
+    echo
+    for MAILUSER in $@; do
+        echo $MAILUSER
+        $DOVEADM mailbox status -u $MAILUSER -t all '*' \
+          || die status
+        echo
+    done
+    printf "Delete messages saved before $DATE from the mailbox(es)? [y/N]: "
+    fn_input_n || exit 0
+    echo
+}
+
+for MAILUSER in $@; do
+    $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
+      expunge -u $MAILUSER SAVEDBEFORE $DATE \
+        || die expunge
+    $DRY_RUN $DOVEADM $DOVEADM_DEBUG \
+      purge -u $MAILUSER \
+        || die purge
+    $DOVEADM $DOVEADM_DEBUG \
+      mailbox status -u $MAILUSER -t all '*'
+    [ "$DRY_RUN" ] && echo
+done

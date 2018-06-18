@@ -44,7 +44,7 @@ while getopts h opt; do
     esac
 done
 
-shift $(($OPTIND - 1))
+shift "$(($OPTIND - 1))"
 
 if [ "$#" -gt "2" ]; then
     printf >&2 "

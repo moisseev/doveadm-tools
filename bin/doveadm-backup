@@ -62,7 +62,7 @@ while getopts c:Dhn opt; do
     esac
 done
 
-shift $(($OPTIND - 1))
+shift "$(($OPTIND - 1))"
 
 # Do exit on SIGINT or SIGTERM
 trap 'printf >&2 "\nExiting on signal 2\n";  exit 0' 2

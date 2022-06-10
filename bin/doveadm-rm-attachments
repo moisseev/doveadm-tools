@@ -451,7 +451,7 @@ Perl 5.14 or later
 
 =item *
 
-IO::Interactive, p5-IPC-Shareable, Mail::Audit::Attach
+IO::Interactive, IPC::Shareable, Mail::Audit::Attach
 
 (and their dependencies)
 

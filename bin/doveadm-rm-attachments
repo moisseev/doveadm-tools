@@ -1,0 +1,472 @@
+#!/usr/bin/env perl
+
+#========================================================================
+# doveadm-rm-attachments - removes attachments from messages
+#========================================================================
+
+use 5.014;
+use warnings;
+
+use Getopt::Long qw( :config no_ignore_case );
+use IO::Interactive qw(is_interactive interactive);
+use IPC::Shareable;
+use Mail::Audit qw(Attach);
+use Pod::Usage;
+use Time::HiRes;
+
+# CONSTANTS you must check
+use constant { DOVEADM => "/usr/local/bin/doveadm", };
+
+our ( $opt_D, $opt_n, $opt_x, $opt_help );
+our $opt_b = 0;
+our $opt_s = '';
+
+unless ( GetOptions( "D", "b=i", "n", "s=s", "x", "help|?" )
+    && ( $opt_help || @ARGV != 0 ) )
+{
+    if ( is_interactive() ) {
+        pod2usage(2);
+    }
+    else {
+        say STDERR "Illegal command line option, exiting";
+        exit 1;
+    }
+}
+pod2usage(1) if ($opt_help);
+
+my $DOVEADM_DEBUG = $opt_D ? " -D" : "";
+
+$SIG{'INT'} = $SIG{'TERM'} = \&int_handler;
+
+&print_status();
+if ( is_interactive() && not $opt_n ) {
+    print "\nDelete attachments from the messages? [y/N]: ";
+    chomp( my $ok = <STDIN> );
+    exit 0 if ( $ok ne "y" );
+}
+
+my %stat;
+
+tie my %counter, 'IPC::Shareable', { key => "counter", create => 1 }
+  or die "FATAL: cannot tie to shared memory: $!";
+tie my @new_stat, 'IPC::Shareable', { key => "stat", create => 1 }
+  or die "FATAL: cannot tie to shared memory: $!";
+
+my $processed = 0;
+my $startTime = Time::HiRes::time();
+
+for my $MAILUSER (@ARGV) {
+    say {interactive} "\n", $opt_n ? "[dry run] " : "", "Deleting attachments from $MAILUSER ...\n";
+
+    printf { interactive(*STDERR) } " %16s | %17s | %27s |\n", "", "messages", "attachments";
+    printf { interactive(*STDERR) } " %16s | %7s | %7s | %7s | %7s | %7s |\n", "", "deleted", "checked", "skipped",
+      "checked", "removed";
+
+    chomp( my @mailbox = &open_doveadm( "mailbox list -u $MAILUSER", $!, "die" ) );
+
+    my @skipped;
+
+    for my $mailbox ( sort @mailbox ) {
+        if ( $mailbox =~ /^shared($|\/)/ ) {
+            push @skipped, $mailbox;
+            next;
+        }
+
+        printf {interactive} " %16s |\0337", $mailbox;
+
+        $counter{deleted} = $counter{messages} = $counter{skipped_att} = 0;
+
+        my @search = open_doveadm( "search -u $MAILUSER mailbox $mailbox $opt_s", $!, "die" );
+
+        for (@search) {
+            my ( $GUID, $UID ) = split;
+            my $pid = fork;
+            die "FATAL: Could not fork new process: $!" unless defined $pid;
+
+            &process_msg( $MAILUSER, $mailbox, $GUID, $UID )
+              if ( $pid == 0 );
+
+            waitpid $pid, 0;
+            &update_stat(@new_stat);
+        }
+        continue {
+            &print_mailbox_progress($mailbox);
+        }
+        $processed += $counter{messages};
+        &print_mailbox_progress($mailbox);
+        say '';
+    }
+    say "";
+
+    if (@skipped) {
+        say "Skipped folders:";
+        say "  ", join( "\n  ", @skipped ), "\n";
+    }
+
+    if ( !$opt_n && $opt_x ) {
+        say {interactive} "Purging $MAILUSER mailboxes.";
+        &system_doveadm( "purge -u $MAILUSER", "Failed to purge mailboxes of $MAILUSER." );
+    }
+}
+
+my $elapsed = Time::HiRes::time() - $startTime;
+printf "Messages processed: $processed; elapsed time: %.2f s; processing rate: %.2f msg/s, %.2f att/s\n",
+  $elapsed, $processed / $elapsed, ( $stat{all}{all}{orig}{num} // 0 ) / $elapsed;
+say "Mailusers: ", join ", ", @ARGV, "\n";
+
+say "Attachment size distribution (file size limit: ${opt_b}B", $opt_s ? ", doveadm search query: $opt_s" : "", ")";
+
+my $size_width = length( $stat{all}{all}{orig}{size} ) // 3;
+my $num_width  = length( $stat{all}{all}{orig}{num} )  // 2;
+my $cell_width = $size_width + 2 + $num_width;
+
+my @intervals = sort keys %{ $stat{all}{all}{orig}{histogram} };
+
+&printHorizontalLine();
+printf "%-23s|", "";
+foreach (@intervals) {
+    printf " %${cell_width}s |", $_ == 0 ? "<=1K" : ">${_}K";
+}
+printf " %${cell_width}s | %${cell_width}s |\n", "Total", "Removed";
+&printHorizontalLine();
+
+for my $mailbox ( sort keys %{ $stat{mailbox} } ) {
+    &print_mailbox_stat( $mailbox, $stat{mailbox}{$mailbox} )
+      if defined $stat{mailbox}{$mailbox}{all}{orig}{num};
+}
+
+&print_mailbox_stat( "All", $stat{all} );
+say "-    Content-Type: text/x-moz-deleted";
+say "=    Content-Disposition: inline";
+say '';
+&print_status();
+
+exit(0);
+
+sub int_handler {
+    my ($signal) = @_;
+    say STDERR "\nCaught $signal signal. Exiting.";
+    die "$!\n";
+}
+
+sub open_doveadm {
+    my ( $cmd, $err_msg, $die ) = @_;
+    my $fh;
+    unless ( open( $fh, "-|", DOVEADM . "$DOVEADM_DEBUG $cmd" ) ) {
+        say STDERR $die ? "FATAL: " : "ERROR: ", $err_msg
+          if defined $err_msg;
+        exit(1)
+          if defined $die;
+    }
+
+    my @ret = <$fh>;
+    close $fh;
+    my $fail = $? >> 8;
+    if ( $fail && defined $err_msg ) {
+        say STDERR $die ? "FATAL: " : "ERROR: ", $err_msg;
+        exit(1) if defined $die;
+    }
+
+    return @ret;
+}
+
+sub system_doveadm {
+    my ( $cmd, $err_msg, $die ) = @_;
+    my $fail = system( DOVEADM . "$DOVEADM_DEBUG $cmd" ) != 0;
+    if ( $fail && defined $err_msg ) {
+        say STDERR $die ? "FATAL: " : "ERROR: ", $err_msg;
+        exit(1) if defined $die;
+    }
+}
+
+sub process_msg {
+    my ( $MAILUSER, $mailbox, $GUID, $UID ) = @_;
+    my $ID = "mailbox-guid $GUID uid $UID";
+    @new_stat = ();
+
+    chomp( my ($flags) =
+          &open_doveadm( "fetch -u $MAILUSER flags $ID", "$ID: Failed to get flags from the original message." ) );
+    if ( $flags =~ s/^flags: // ) {
+        if ( $flags =~ /(^|\s)\\Deleted(\s|$)/ ) {
+            $counter{deleted}++;
+            exit;
+        }
+        else {
+            $counter{messages}++;
+        }
+    }
+    else {
+        say STDERR "ERROR: $ID: 'flags:' key not found.";
+    }
+
+    my @text = &open_doveadm( "fetch -u $MAILUSER text $ID", $!, "die" );
+
+    unless ( $text[0] eq "text:\n" ) {
+        say STDERR "FATAL: $ID: 'text:' key not found. Stop message processing.";
+        exit;
+    }
+    shift @text;
+
+    my $mail = Mail::Audit->new( data => \@text, noexit => 1 );
+    exit
+      unless ( $mail->num_attachments );
+
+    my $is_altered = 0;
+    foreach my $att ( @{ $mail->attachments } ) {
+        my $mime_type   = $att->mime_type;
+        my $filename    = $att->filename;
+        my $disposition = $att->head->mime_attr("content-disposition");
+        my ($ext)       = $filename =~ /([^.]+?)$/;
+        if ( $mime_type eq "text/x-moz-deleted" ) {
+            $ext = "-$ext";
+        }
+        elsif ( $disposition eq "inline" ) {
+            $ext = "=$ext";
+        }
+
+        # The 'size' method of the Mail::Audit::Attach fails on forwarded messages.
+        if ( $mime_type eq "message/rfc822" ) {
+            $counter{skipped_att}++;
+            next;
+        }
+        my $size = $att->size;
+
+        push @new_stat, join( ':', $mailbox, $ext, "orig", $size );
+
+        for my $interval ( reverse 0, 1, 10, 100, 1000, 10000 ) {
+            if ( $size > 1024 * $interval ) {
+                push @new_stat, join( ':', $mailbox, $ext, "orig", $size, $interval );
+                last;
+            }
+        }
+
+        next
+          if ( $mime_type eq "text/x-moz-deleted"
+            || $mime_type eq "message/delivery-status"
+            || $disposition eq "inline"
+            || $size < $opt_b );
+
+        unless ($opt_n) {
+            open my $fh_mime_body, '>', $att->bodyhandle->path;
+            $fh_mime_body->print(
+                "You deleted an attachment from this message. The original MIME headers for the attachment were:\n");
+            foreach my $mh ( @{ $att->{mail_inet_head}->{mail_hdr_list} } ) {
+                my ($hdr) = split( ':', $mh, 2 );
+                $fh_mime_body->print( ${ $att->{mail_inet_head}->{mail_hdr_hash}->{$hdr}[0] } );
+            }
+            close $fh_mime_body;
+
+            $att->{mail_inet_head}->{mail_hdr_list} = [
+                qq{Content-Type: text/x-moz-deleted; name="Deleted: } . $att->filename . qq{"\n},
+                qq{Content-Transfer-Encoding: 8bit\n},
+                qq{Content-Disposition: inline; filename="Deleted: } . $att->filename . qq{"\n},
+                qq{X-Mozilla-Altered: AttachmentDeleted; date="} . localtime() . qq{"\n},
+            ];
+
+            $att->{mail_inet_head}->{mail_hdr_hash} = ();
+            my $i = 0;
+            foreach my $mh ( @{ $att->{mail_inet_head}->{mail_hdr_list} } ) {
+                my ($hdr) = split( ':', $mh, 2 );
+                $att->{mail_inet_head}->{mail_hdr_hash}->{$hdr} = [ \$att->{mail_inet_head}->{mail_hdr_list}[$i] ];
+                $i++;
+            }
+
+            $is_altered++;
+        }
+
+        push @new_stat, join( ':', $mailbox, $ext, "removed", $size );
+    }
+
+    exit
+      unless ($is_altered);
+
+    my $header = "X-Original-UID";
+
+    $mail->replace_header( $header => $UID );
+
+    # Saving the modified message.
+    my $status = $mail->pipe( DOVEADM . "$DOVEADM_DEBUG save -u $MAILUSER -m $mailbox" );
+    if ( $status != 0 ) {
+        say STDERR
+          "FATAL: $ID: Failed to save modified message with pipe exit code (${status}). Stop message processing.";
+        exit;
+    }
+
+    # Copy message flags and IMAP keywords.
+    if ($flags) {
+
+        # Getting UID of the altered message.
+        chomp(
+            my ($UID_messageset) = &open_doveadm(
+                "search -u $MAILUSER mailbox $mailbox SAVEDSINCE 10secs UNDELETED HEADER $header $UID",
+                "$ID: Failed to get UID of the altered message."
+            )
+        );
+        my ( undef, $UID_altered ) = split( ' ', $UID_messageset );
+
+        # Replacing flags.
+        &system_doveadm( "flags replace -u $MAILUSER '$flags' mailbox-guid $GUID uid $UID_altered",
+            "$ID: Failed to replace flags of the altered message." );
+    }
+
+    # Delete original message.
+    if ($opt_x) {
+        &system_doveadm( "expunge -u $MAILUSER $ID", "$ID: Failed to expunge original message." );
+    }
+    else {
+        &system_doveadm( "flags add -u $MAILUSER '\\Deleted' $ID",
+            "$ID: " . 'Failed to add \Deleted flag to the original message.' );
+    }
+
+    exit;
+}
+
+sub update_stat {
+    for (@_) {
+        my ( $mailbox, $ext, $key, $size, $interval ) = split ":";
+        for my $m ( $stat{mailbox}{$mailbox}, $stat{all} ) {
+            for my $e ( $m->{ext}{$ext}, $m->{all} ) {
+                if ( defined $interval ) {
+                    $e->{$key}{histogram}{$interval}{size} += $size;
+                    $e->{$key}{histogram}{$interval}{num}++;
+                }
+                else {
+                    $e->{$key}{size} += $size;
+                    $e->{$key}{num}++;
+                }
+            }
+        }
+    }
+}
+
+sub print_status {
+    return unless ( is_interactive() );
+    say '';
+    for (@ARGV) {
+        print $_, ": ";
+        &system_doveadm( "mailbox status -u $_ -t all '*'", "Failed to get status of $_", "die" );
+    }
+}
+
+sub print_mailbox_progress {
+    my $mailbox = shift;
+    printf { interactive(*STDERR) } "\033[K %7d | %7d | %7d | %7d | %7d |\0338",
+      $counter{deleted}, $counter{messages},
+      $counter{skipped_att}, $stat{mailbox}{$mailbox}{all}{orig}{num} // 0,
+      $stat{mailbox}{$mailbox}{all}{removed}{num} // 0;
+}
+
+sub printHorizontalLine {
+    my $i = 24 + ( @intervals + 2 ) * ( ${cell_width} + 3 );
+    while ( $i-- ) { print "-" }
+    say '';
+}
+
+sub print_cell {
+    printf " %${size_width}sB/%-${num_width}s |", $_[0]{size} // 0, $_[0]{num} // 0;
+}
+
+sub print_row {
+    my ( $header, $st ) = @_;
+    printf "%-23s|", $header;
+    for my $interval (@intervals) {
+        &print_cell( $st->{orig}{histogram}{$interval} );
+    }
+    &print_cell( $st->{orig} );
+    &print_cell( $st->{removed} );
+    say '';
+}
+
+sub print_mailbox_stat {
+    my ( $title, $st ) = @_;
+    say $title;
+    for my $ext ( sort keys %{ $st->{ext} } ) {
+        &print_row( $ext =~ s/^([^-=])/ $1/r, $st->{ext}{$ext} );
+    }
+    &print_row( "Total", $st->{all} );
+    &printHorizontalLine();
+}
+
+__END__
+
+
+=head1 NAME
+
+doveadm-rm-attachments - removes attachments from messages that match the
+criteria specified via options.
+
+
+=head1 SYNOPSIS
+
+B<doveadm-rm-attachments> [-D] [-n] [-b F<limit>] [-s F<search_query>] [-x]
+F<user> [F<user2> ...]
+
+B<doveadm-rm-attachments --help|-?>
+
+ Options:
+       -D               doveadm(1) verbosity and debug messages
+       -n               dry run
+       -b               attachment file size limit; attachments bigger than this limit are removed
+       -s search_query  process messages matching this doveadm(1) search query
+       -x               expunge original messages
+
+       --help -?        brief help message
+
+
+=head1 OPTIONS
+
+=over
+
+=item  B<-D>
+
+Enables doveadm(1) verbosity and debug messages.
+
+=item B<-b> I<bytes>
+
+Specify a file size limit in bytes; attachments bigger than this limit are
+removed. The default is no limit.
+
+=item B<-s> I<search_query>
+
+Process messages matching this doveadm(1) search query. See
+doveadm-search-query(7) for details.
+
+=item B<-x>
+
+Expunge original messages instead of adding the \Deleted flag.
+
+=item B<--help, -?>
+
+Brief help.
+
+=back
+
+=head1 REQUIREMENTS
+
+=over 4
+
+=item *
+
+Perl 5.14 or later
+
+=item *
+
+IO::Interactive, p5-IPC-Shareable, Mail::Audit::Attach
+
+(and their dependencies)
+
+=item *
+
+dovecot
+
+=back
+
+=head1 EXAMPLES
+
+Remove attachments bigger than 1M from mail messages, which were saved before
+24th of February 2022, expunge original messages and purge user's mailboxes:
+
+B<doveadm-rm-attachments -b 1048576 -s 'savedbefore 2022-05-16' -x
+user@example.org>
+
+=cut

@@ -12,6 +12,8 @@
 
 * **doveadm-report-quota** - shows current quota usage.
 
+* **doveadm-rm-attachments** - removes attachments from messages that match the criteria specified via options.
+
 * **doveadm-rm-savedbefore** - removes messages, which were saved before the given date specification.
 
 * **dsisck** - Dovecot SIS consistency check and repair. Based on explanation of SIS operation <sup>[1](#fn1),[2](#fn2),[3](#fn3)</sup>. Main purpose of this program is to deduplicate identical attachments that was saved in separate files for some reason. For instance, attachment deduplication was broken in Dovecot v2.2.16 upwards and fixed in v2.2.22. Every attachment was saved in a separate file.

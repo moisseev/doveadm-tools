@@ -9,7 +9,7 @@ use warnings;
 
 use Getopt::Long qw( :config no_ignore_case );
 use IO::Interactive qw(is_interactive interactive);
-use IPC::Shareable;
+use JSON::PP;
 use Mail::Audit qw(Attach);
 use Pod::Usage;
 use Time::HiRes;
@@ -46,11 +46,7 @@ if ( is_interactive() && not $opt_n ) {
 }
 
 my %stat;
-
-tie my %counter, 'IPC::Shareable', { key => 0, create => 1, destroy => 1 }
-  or die "FATAL: cannot tie to shared memory: $!";
-tie my @new_stat, 'IPC::Shareable', { key => 0, create => 1, destroy => 1 }
-  or die "FATAL: cannot tie to shared memory: $!";
+my %counter = ( deleted => 0, messages => 0, skipped_att => 0 );
 
 my $processed = 0;
 my $startTime = Time::HiRes::time();
@@ -80,22 +76,32 @@ for my $MAILUSER (@ARGV) {
 
         my $batch_size = 100;
         for ( my $i = 0 ; $i < @search ; $i += $batch_size ) {
+            pipe( my $reader, my $writer ) or die "pipe: $!";
             my $pid = fork;
             die "FATAL: Could not fork new process: $!" unless defined $pid;
 
             if ( $pid == 0 ) {
+                close $reader;
+                my %local_counter = ( deleted => 0, messages => 0, skipped_att => 0 );
                 my @batch_stat;
                 for ( my $j = $i ; $j < $i + $batch_size && $j < @search ; $j++ ) {
                     my ( $GUID, $UID ) = split ' ', $search[$j];
-                    &process_msg( $MAILUSER, $mailbox, $GUID, $UID, \@batch_stat );
+                    &process_msg( $MAILUSER, $mailbox, $GUID, $UID, \@batch_stat, \%local_counter );
                 }
-                @new_stat = @batch_stat;
+                print $writer encode_json({ counter => \%local_counter, stat => \@batch_stat });
+                close $writer;
                 exit 0;
             }
 
+            close $writer;
+            my $data = do { local $/; <$reader> };
+            close $reader;
+            if ($data) {
+                my $res = decode_json($data);
+                for (keys %{$res->{counter}}) { $counter{$_} += $res->{counter}{$_} }
+                &update_stat(@{$res->{stat}});
+            }
             waitpid $pid, 0;
-            &update_stat(@new_stat);
-            @new_stat = ();
             &print_mailbox_progress($mailbox);
         }
         $processed += $counter{messages};
@@ -186,7 +192,7 @@ sub system_doveadm {
 }
 
 sub process_msg {
-    my ( $MAILUSER, $mailbox, $GUID, $UID, $batch_stat ) = @_;
+    my ( $MAILUSER, $mailbox, $GUID, $UID, $batch_stat, $local_counter ) = @_;
     my $ID = "mailbox-guid $GUID uid $UID";
 
     my @fetch = &open_doveadm( "fetch -u $MAILUSER 'flags text' $ID", "$ID: Failed to fetch flags and text from the original message." );
@@ -196,7 +202,7 @@ sub process_msg {
     if ( $flags =~ s/^flags: // ) {
         chomp $flags;
         if ( $flags =~ /(^|\s)\\Deleted(\s|$)/ ) {
-            $counter{deleted}++;
+            $local_counter->{deleted}++;
             return;
         }
     }
@@ -204,7 +210,7 @@ sub process_msg {
         say STDERR "ERROR: $ID: 'flags:' key not found.";
         return;
     }
-    $counter{messages}++;
+    $local_counter->{messages}++;
 
     my $text_marker = shift @fetch;
     unless ( defined $text_marker && $text_marker eq "text:\n" ) {
@@ -232,7 +238,7 @@ sub process_msg {
 
         # The 'size' method of the Mail::Audit::Attach fails on forwarded messages.
         if ( $mime_type eq "message/rfc822" ) {
-            $counter{skipped_att}++;
+            $local_counter->{skipped_att}++;
             next;
         }
         my $size = $att->size;
@@ -457,7 +463,7 @@ Perl 5.14 or later
 
 =item *
 
-IO::Interactive, IPC::Shareable, Mail::Audit::Attach
+IO::Interactive, Mail::Audit::Attach
 
 (and their dependencies)
 

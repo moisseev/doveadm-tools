@@ -47,9 +47,9 @@ if ( is_interactive() && not $opt_n ) {
 
 my %stat;
 
-tie my %counter, 'IPC::Shareable', { key => "counter", create => 1 }
+tie my %counter, 'IPC::Shareable', { key => 0, create => 1, destroy => 1 }
   or die "FATAL: cannot tie to shared memory: $!";
-tie my @new_stat, 'IPC::Shareable', { key => "stat", create => 1 }
+tie my @new_stat, 'IPC::Shareable', { key => 0, create => 1, destroy => 1 }
   or die "FATAL: cannot tie to shared memory: $!";
 
 my $processed = 0;

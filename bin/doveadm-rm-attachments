@@ -9,6 +9,7 @@ use warnings;
 
 use Getopt::Long qw( :config no_ignore_case );
 use IO::Interactive qw(is_interactive interactive);
+use IO::Select;
 use JSON::PP;
 use Mail::Audit qw(Attach);
 use Pod::Usage;
@@ -19,9 +20,10 @@ use constant { DOVEADM => "/usr/local/bin/doveadm", };
 
 our ( $opt_D, $opt_n, $opt_x, $opt_help );
 our $opt_b = 0;
+our $opt_j = 2;
 our $opt_s = '';
 
-unless ( GetOptions( "D", "b=i", "n", "s=s", "x", "help|?" )
+unless ( GetOptions( "D", "b=i", "j=i", "n", "s=s", "x", "help|?" )
     && ( $opt_help || @ARGV != 0 ) )
 {
     if ( is_interactive() ) {
@@ -33,6 +35,8 @@ unless ( GetOptions( "D", "b=i", "n", "s=s", "x", "help|?" )
     }
 }
 pod2usage(1) if ($opt_help);
+
+die "FATAL: -j must be at least 1\n" if $opt_j < 1;
 
 my $DOVEADM_DEBUG = $opt_D ? " -D" : "";
 
@@ -75,7 +79,14 @@ for my $MAILUSER (@ARGV) {
         my @search = open_doveadm( "search -u $MAILUSER mailbox $mailbox $opt_s", $!, "die" );
 
         my $batch_size = 100;
+        my $select     = IO::Select->new();
+        my %workers;
+
         for ( my $i = 0 ; $i < @search ; $i += $batch_size ) {
+            while ( $select->count >= $opt_j ) {
+                reap_worker( $select, \%workers, $mailbox );
+            }
+
             pipe( my $reader, my $writer ) or die "pipe: $!";
             my $pid = fork;
             die "FATAL: Could not fork new process: $!" unless defined $pid;
@@ -94,27 +105,12 @@ for my $MAILUSER (@ARGV) {
             }
 
             close $writer;
-            my $data = do { local $/; <$reader> };
-            close $reader;
+            $select->add($reader);
+            $workers{$reader} = $pid;
+        }
 
-            waitpid $pid, 0;
-            if ($? != 0) {
-                my $exit_code = $? >> 8;
-                my $signal    = $? & 127;
-                my $reason = $signal ? "terminated by signal $signal" : "exit code $exit_code";
-                say STDERR "ERROR: Worker process exited with error ($reason). Skipping batch.";
-            }
-            elsif ($data) {
-                my $res = eval { decode_json($data) };
-                if ($@) {
-                    say STDERR "ERROR: Failed to decode worker output: $@";
-                }
-                else {
-                    for (keys %{$res->{counter}}) { $counter{$_} += $res->{counter}{$_} }
-                    &update_stat(@{$res->{stat}});
-                }
-            }
-            &print_mailbox_progress($mailbox);
+        while ( $select->count > 0 ) {
+            reap_worker( $select, \%workers, $mailbox );
         }
         $processed += $counter{messages};
         &print_mailbox_progress($mailbox);
@@ -166,6 +162,37 @@ say '';
 &print_status();
 
 exit(0);
+
+sub reap_worker {
+    my ( $select, $workers, $mailbox ) = @_;
+    my @ready = $select->can_read();
+    for my $reader (@ready) {
+        my $pid = $workers->{$reader};
+        my $data = do { local $/; <$reader> };
+        close $reader;
+        $select->remove($reader);
+        delete $workers->{$reader};
+
+        waitpid $pid, 0;
+        if ($? != 0) {
+            my $exit_code = $? >> 8;
+            my $signal    = $? & 127;
+            my $reason = $signal ? "terminated by signal $signal" : "exit code $exit_code";
+            say STDERR "[$pid] ERROR: Worker process exited with error ($reason). Skipping batch.";
+        }
+        elsif ($data) {
+            my $res = eval { decode_json($data) };
+            if ($@) {
+                say STDERR "[$pid] ERROR: Failed to decode worker output: $@";
+            }
+            else {
+                for (keys %{$res->{counter}}) { $counter{$_} += $res->{counter}{$_} }
+                &update_stat(@{$res->{stat}});
+            }
+        }
+        &print_mailbox_progress($mailbox);
+    }
+}
 
 sub int_handler {
     my ($signal) = @_;
@@ -422,7 +449,7 @@ criteria specified via options.
 
 =head1 SYNOPSIS
 
-B<doveadm-rm-attachments> [-D] [-n] [-b F<limit>] [-s F<search_query>] [-x]
+B<doveadm-rm-attachments> [-D] [-n] [-b F<limit>] [-j F<jobs>] [-s F<search_query>] [-x]
 F<user> [F<user2> ...]
 
 B<doveadm-rm-attachments --help|-?>
@@ -431,6 +458,7 @@ B<doveadm-rm-attachments --help|-?>
        -D               doveadm(1) verbosity and debug messages
        -n               dry run
        -b               attachment file size limit; attachments bigger than this limit are removed
+       -j               number of parallel jobs (default: 2)
        -s search_query  process messages matching this doveadm(1) search query
        -x               expunge original messages
 
@@ -449,6 +477,10 @@ Enables doveadm(1) verbosity and debug messages.
 
 Specify a file size limit in bytes; attachments bigger than this limit are
 removed. The default is no limit.
+
+=item B<-j> I<jobs>
+
+Number of parallel jobs. The default is 2.
 
 =item B<-s> I<search_query>
 

@@ -96,12 +96,24 @@ for my $MAILUSER (@ARGV) {
             close $writer;
             my $data = do { local $/; <$reader> };
             close $reader;
-            if ($data) {
-                my $res = decode_json($data);
-                for (keys %{$res->{counter}}) { $counter{$_} += $res->{counter}{$_} }
-                &update_stat(@{$res->{stat}});
-            }
+
             waitpid $pid, 0;
+            if ($? != 0) {
+                my $exit_code = $? >> 8;
+                my $signal    = $? & 127;
+                my $reason = $signal ? "terminated by signal $signal" : "exit code $exit_code";
+                say STDERR "ERROR: Worker process exited with error ($reason). Skipping batch.";
+            }
+            elsif ($data) {
+                my $res = eval { decode_json($data) };
+                if ($@) {
+                    say STDERR "ERROR: Failed to decode worker output: $@";
+                }
+                else {
+                    for (keys %{$res->{counter}}) { $counter{$_} += $res->{counter}{$_} }
+                    &update_stat(@{$res->{stat}});
+                }
+            }
             &print_mailbox_progress($mailbox);
         }
         $processed += $counter{messages};

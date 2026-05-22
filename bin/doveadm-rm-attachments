@@ -78,18 +78,24 @@ for my $MAILUSER (@ARGV) {
 
         my @search = open_doveadm( "search -u $MAILUSER mailbox $mailbox $opt_s", $!, "die" );
 
-        for (@search) {
-            my ( $GUID, $UID ) = split;
+        my $batch_size = 100;
+        for ( my $i = 0 ; $i < @search ; $i += $batch_size ) {
             my $pid = fork;
             die "FATAL: Could not fork new process: $!" unless defined $pid;
 
-            &process_msg( $MAILUSER, $mailbox, $GUID, $UID )
-              if ( $pid == 0 );
+            if ( $pid == 0 ) {
+                my @batch_stat;
+                for ( my $j = $i ; $j < $i + $batch_size && $j < @search ; $j++ ) {
+                    my ( $GUID, $UID ) = split ' ', $search[$j];
+                    &process_msg( $MAILUSER, $mailbox, $GUID, $UID, \@batch_stat );
+                }
+                @new_stat = @batch_stat;
+                exit 0;
+            }
 
             waitpid $pid, 0;
             &update_stat(@new_stat);
-        }
-        continue {
+            @new_stat = ();
             &print_mailbox_progress($mailbox);
         }
         $processed += $counter{messages};
@@ -180,35 +186,35 @@ sub system_doveadm {
 }
 
 sub process_msg {
-    my ( $MAILUSER, $mailbox, $GUID, $UID ) = @_;
+    my ( $MAILUSER, $mailbox, $GUID, $UID, $batch_stat ) = @_;
     my $ID = "mailbox-guid $GUID uid $UID";
-    @new_stat = ();
 
-    chomp( my ($flags) =
-          &open_doveadm( "fetch -u $MAILUSER flags $ID", "$ID: Failed to get flags from the original message." ) );
+    my @fetch = &open_doveadm( "fetch -u $MAILUSER 'flags text' $ID", "$ID: Failed to fetch flags and text from the original message." );
+    return unless @fetch;
+
+    my $flags = shift @fetch;
     if ( $flags =~ s/^flags: // ) {
+        chomp $flags;
         if ( $flags =~ /(^|\s)\\Deleted(\s|$)/ ) {
             $counter{deleted}++;
-            exit;
-        }
-        else {
-            $counter{messages}++;
+            return;
         }
     }
     else {
         say STDERR "ERROR: $ID: 'flags:' key not found.";
+        return;
     }
+    $counter{messages}++;
 
-    my @text = &open_doveadm( "fetch -u $MAILUSER text $ID", $!, "die" );
-
-    unless ( $text[0] eq "text:\n" ) {
+    my $text_marker = shift @fetch;
+    unless ( defined $text_marker && $text_marker eq "text:\n" ) {
         say STDERR "FATAL: $ID: 'text:' key not found. Stop message processing.";
-        exit;
+        return;
     }
-    shift @text;
 
+    my @text = @fetch;
     my $mail = Mail::Audit->new( data => \@text, noexit => 1 );
-    exit
+    return
       unless ( $mail->num_attachments );
 
     my $is_altered = 0;
@@ -231,11 +237,11 @@ sub process_msg {
         }
         my $size = $att->size;
 
-        push @new_stat, join( ':', $mailbox, $ext, "orig", $size );
+        push @{$batch_stat}, join( ':', $mailbox, $ext, "orig", $size );
 
         for my $interval ( reverse 0, 1, 10, 100, 1000, 10000 ) {
             if ( $size > 1024 * $interval ) {
-                push @new_stat, join( ':', $mailbox, $ext, "orig", $size, $interval );
+                push @{$batch_stat}, join( ':', $mailbox, $ext, "orig", $size, $interval );
                 last;
             }
         }
@@ -274,10 +280,10 @@ sub process_msg {
             $is_altered++;
         }
 
-        push @new_stat, join( ':', $mailbox, $ext, "removed", $size );
+        push @{$batch_stat}, join( ':', $mailbox, $ext, "removed", $size );
     }
 
-    exit
+    return
       unless ($is_altered);
 
     my $header = "X-Original-UID";
@@ -289,7 +295,7 @@ sub process_msg {
     if ( $status != 0 ) {
         say STDERR
           "FATAL: $ID: Failed to save modified message with pipe exit code (${status}). Stop message processing.";
-        exit;
+        return;
     }
 
     # Copy message flags and IMAP keywords.
@@ -318,7 +324,7 @@ sub process_msg {
             "$ID: " . 'Failed to add \Deleted flag to the original message.' );
     }
 
-    exit;
+    return;
 }
 
 sub update_stat {

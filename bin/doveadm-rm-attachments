@@ -62,7 +62,7 @@ for my $MAILUSER (@ARGV) {
     printf { interactive(*STDERR) } " %16s | %7s | %7s | %7s | %7s | %7s |\n", "", "deleted", "checked", "skipped",
       "checked", "removed";
 
-    chomp( my @mailbox = &open_doveadm( "mailbox list -u $MAILUSER", $!, "die" ) );
+    chomp( my @mailbox = &open_doveadm( "mailbox list -u $MAILUSER", "Failed to list mailboxes of $MAILUSER", "die" ) );
 
     my @skipped;
 
@@ -76,7 +76,7 @@ for my $MAILUSER (@ARGV) {
 
         $counter{deleted} = $counter{messages} = $counter{skipped_att} = 0;
 
-        my @search = open_doveadm( "search -u $MAILUSER mailbox $mailbox $opt_s", $!, "die" );
+        my @search = open_doveadm( "search -u $MAILUSER mailbox $mailbox $opt_s", "Failed to search mailbox $mailbox of $MAILUSER", "die" );
 
         my $batch_size = 100;
         my $select     = IO::Select->new();

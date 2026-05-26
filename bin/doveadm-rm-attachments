@@ -295,7 +295,7 @@ sub process_msg {
           if ( $mime_type eq "text/x-moz-deleted"
             || $mime_type eq "message/delivery-status"
             || $disposition eq "inline"
-            || $size < $opt_b );
+            || $size <= $opt_b );
 
         unless ($opt_n) {
             open my $fh_mime_body, '>', $att->bodyhandle->path;

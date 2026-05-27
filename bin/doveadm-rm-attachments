@@ -307,10 +307,13 @@ sub process_msg {
             }
             close $fh_mime_body;
 
+            my $fn = $att->filename // '';
+            utf8::encode($fn);
+
             $att->{mail_inet_head}->{mail_hdr_list} = [
-                qq{Content-Type: text/x-moz-deleted; name="Deleted: } . $att->filename . qq{"\n},
+                qq{Content-Type: text/x-moz-deleted; name="Deleted: ${fn}"\n},
                 qq{Content-Transfer-Encoding: 8bit\n},
-                qq{Content-Disposition: inline; filename="Deleted: } . $att->filename . qq{"\n},
+                qq{Content-Disposition: inline; filename="Deleted: ${fn}"\n},
                 qq{X-Mozilla-Altered: AttachmentDeleted; date="} . localtime() . qq{"\n},
             ];
 

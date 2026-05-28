@@ -51,6 +51,8 @@ if ( is_interactive() && not $opt_n ) {
 
 my %stat;
 my %counter = ( deleted => 0, messages => 0, skipped_att => 0 );
+my %workers;
+my $parent_pid = $$;
 
 my $processed = 0;
 my $startTime = Time::HiRes::time();
@@ -80,7 +82,7 @@ for my $MAILUSER (@ARGV) {
 
         my $batch_size = 100;
         my $select     = IO::Select->new();
-        my %workers;
+        %workers = ();
 
         for ( my $i = 0 ; $i < @search ; $i += $batch_size ) {
             while ( $select->count >= $opt_j ) {
@@ -93,6 +95,7 @@ for my $MAILUSER (@ARGV) {
 
             if ( $pid == 0 ) {
                 close $reader;
+                $SIG{'INT'} = $SIG{'TERM'} = sub { exit 1 };
                 my %local_counter = ( deleted => 0, messages => 0, skipped_att => 0 );
                 my @batch_stat;
                 for ( my $j = $i ; $j < $i + $batch_size && $j < @search ; $j++ ) {
@@ -175,9 +178,12 @@ sub reap_worker {
 
         waitpid $pid, 0;
         if ($? != 0) {
-            kill 'TERM', values %$workers;
-            my $exit_code = $? >> 8;
-            my $signal    = $? & 127;
+            my $child_error = $?;
+            my @remaining = values %$workers;
+            kill 'TERM', @remaining if @remaining;
+            waitpid($_, 0) for @remaining;
+            my $exit_code = $child_error >> 8;
+            my $signal    = $child_error & 127;
             my $reason = $signal ? "terminated by signal $signal" : "exit code $exit_code";
             die "FATAL: Worker [$pid] exited with error ($reason). Aborting.\n";
         }
@@ -198,7 +204,11 @@ sub reap_worker {
 sub int_handler {
     my ($signal) = @_;
     say STDERR "\nCaught $signal signal. Exiting.";
-    die "$!\n";
+    if ($$ == $parent_pid && %workers) {
+        kill 'TERM', values %workers;
+        waitpid($_, 0) for values %workers;
+    }
+    exit 1;
 }
 
 sub open_doveadm {

@@ -175,10 +175,11 @@ sub reap_worker {
 
         waitpid $pid, 0;
         if ($? != 0) {
+            kill 'TERM', values %$workers;
             my $exit_code = $? >> 8;
             my $signal    = $? & 127;
             my $reason = $signal ? "terminated by signal $signal" : "exit code $exit_code";
-            say STDERR "[$pid] ERROR: Worker process exited with error ($reason). Skipping batch.";
+            die "FATAL: Worker [$pid] exited with error ($reason). Aborting.\n";
         }
         elsif ($data) {
             my $res = eval { decode_json($data) };
@@ -346,8 +347,8 @@ sub process_msg {
     my $status = $mail->pipe( DOVEADM . "$DOVEADM_DEBUG save -u $MAILUSER -m $mailbox" );
     if ( $status != 0 ) {
         say STDERR
-          "FATAL: $ID: Failed to save modified message with pipe exit code (${status}). Stop message processing.";
-        return;
+          "FATAL: $ID: Failed to save modified message with pipe exit code (${status}).";
+        die "doveadm save failed\n";
     }
 
     # Copy message flags and IMAP keywords.

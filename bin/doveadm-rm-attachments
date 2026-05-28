@@ -376,8 +376,10 @@ sub process_msg {
             say STDERR "ERROR: $ID: Failed to find the altered message. Skipping flag replacement.";
         }
         else {
+            # Escape single quotes for shell safety (RFC 3501 allows them in IMAP atoms).
+            (my $shell_flags = $flags) =~ s/'/'\\''/g;
             # Replacing flags.
-            &system_doveadm( "flags replace -u $MAILUSER '$flags' mailbox-guid $GUID uid $UID_altered",
+            &system_doveadm( "flags replace -u $MAILUSER '$shell_flags' mailbox-guid $GUID uid $UID_altered",
                 "$ID: Failed to replace flags of the altered message." );
         }
     }

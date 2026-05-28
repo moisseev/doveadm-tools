@@ -265,9 +265,10 @@ sub process_msg {
     my $is_altered = 0;
     foreach my $att ( @{ $mail->attachments } ) {
         my $mime_type   = $att->mime_type;
-        my $filename    = $att->filename;
-        my $disposition = $att->head->mime_attr("content-disposition");
+        my $filename    = $att->filename // '';
+        my $disposition = $att->head->mime_attr("content-disposition") // '';
         my ($ext)       = $filename =~ /([^.]+?)$/;
+        $ext //= '';
         if ( $mime_type eq "text/x-moz-deleted" ) {
             $ext = "-$ext";
         }
@@ -357,10 +358,14 @@ sub process_msg {
             )
         );
         my ( undef, $UID_altered ) = split( ' ', $UID_messageset );
-
-        # Replacing flags.
-        &system_doveadm( "flags replace -u $MAILUSER '$flags' mailbox-guid $GUID uid $UID_altered",
-            "$ID: Failed to replace flags of the altered message." );
+        unless ( defined $UID_altered ) {
+            say STDERR "ERROR: $ID: Failed to find the altered message. Skipping flag replacement.";
+        }
+        else {
+            # Replacing flags.
+            &system_doveadm( "flags replace -u $MAILUSER '$flags' mailbox-guid $GUID uid $UID_altered",
+                "$ID: Failed to replace flags of the altered message." );
+        }
     }
 
     # Delete original message.

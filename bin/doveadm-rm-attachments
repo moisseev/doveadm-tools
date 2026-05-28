@@ -231,6 +231,9 @@ sub system_doveadm {
 }
 
 sub process_msg {
+    # Suppress charset conversion warnings from MIME::Head (e.g. GB18030).
+    local $SIG{__WARN__} = sub { warn $_[0] unless $_[0] =~ /Unable to convert text in character set/ };
+
     my ( $MAILUSER, $mailbox, $GUID, $UID, $batch_stat, $local_counter ) = @_;
     my $ID = "mailbox-guid $GUID uid $UID";
 

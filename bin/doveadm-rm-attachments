@@ -15,8 +15,15 @@ use Mail::Audit qw(Attach);
 use Pod::Usage;
 use Time::HiRes;
 
+# Attachment names/extensions may be wide characters (UTF-8).
+binmode STDOUT, ':utf8';
+binmode STDERR, ':utf8';
+
 # CONSTANTS you must check
 use constant { DOVEADM => "/usr/local/bin/doveadm", };
+
+# Width of the mailbox-name column in the progress table.
+use constant MAILBOX_COL_WIDTH => 20;
 
 our ( $opt_D, $opt_n, $opt_x, $opt_help );
 our $opt_b = 0;
@@ -60,8 +67,8 @@ my $startTime = Time::HiRes::time();
 for my $MAILUSER (@ARGV) {
     say {interactive} "\n", $opt_n ? "[dry run] " : "", "Deleting attachments from $MAILUSER ...\n";
 
-    printf { interactive(*STDERR) } " %16s | %17s | %27s |\n", "", "messages", "attachments";
-    printf { interactive(*STDERR) } " %16s | %7s | %7s | %7s | %7s | %7s |\n", "", "deleted", "checked", "skipped",
+    printf { interactive(*STDERR) } " %*s | %17s | %27s |\n", MAILBOX_COL_WIDTH, "", "messages", "attachments";
+    printf { interactive(*STDERR) } " %*s | %7s | %7s | %7s | %7s | %7s |\n", MAILBOX_COL_WIDTH, "", "deleted", "checked", "skipped",
       "checked", "removed";
 
     chomp( my @mailbox = &open_doveadm( "mailbox list -u $MAILUSER", "Failed to list mailboxes of $MAILUSER", "die" ) );
@@ -74,7 +81,7 @@ for my $MAILUSER (@ARGV) {
             next;
         }
 
-        printf {interactive} " %16s |\0337", $mailbox;
+        printf {interactive} " %*s |\0337", MAILBOX_COL_WIDTH, mailbox_label($mailbox);
 
         $counter{deleted} = $counter{messages} = $counter{skipped_att} = 0;
 
@@ -161,6 +168,7 @@ for my $mailbox ( sort keys %{ $stat{mailbox} } ) {
 &print_mailbox_stat( "All", $stat{all} );
 say "-    Content-Type: text/x-moz-deleted";
 say "=    Content-Disposition: inline";
+say "(none)  no file extension";
 say '';
 &print_status();
 
@@ -281,8 +289,8 @@ sub process_msg {
         my $mime_type   = $att->mime_type;
         my $filename    = $att->filename // '';
         my $disposition = $att->head->mime_attr("content-disposition") // '';
-        my ($ext)       = $filename =~ /([^.]+?)$/;
-        $ext //= '';
+        my ($ext)       = $filename =~ /\.([^.]+)$/;
+        $ext = defined $ext ? lc($ext) : '(none)';
         if ( $mime_type eq "text/x-moz-deleted" ) {
             $ext = "-$ext";
         }
@@ -421,6 +429,13 @@ sub print_status {
         print $_, ": ";
         &system_doveadm( "mailbox status -u $_ -t all '*'", "Failed to get status of $_", "die" );
     }
+}
+
+sub mailbox_label {
+    my ($mailbox) = @_;
+    return $mailbox if length($mailbox) <= MAILBOX_COL_WIDTH;
+    # Keep the leaf (rightmost chars); prefix an ellipsis to mark truncation.
+    return "\x{2026}" . substr( $mailbox, -( MAILBOX_COL_WIDTH - 1 ) );
 }
 
 sub print_mailbox_progress {
